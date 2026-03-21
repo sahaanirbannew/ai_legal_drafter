@@ -1,0 +1,25 @@
+<html>
+
+<body>
+
+<h2>Legal Case Generator</h2>
+
+<input type="file" id="file">
+
+<button onclick="upload()">Upload</button>
+
+<button onclick="generate()">Generate</button>
+
+<div id="status" style="margin: 12px 0; font-weight: bold;"></div>
+
+<pre id="output"></pre>
+
+<div id="citations"></div>
+<button onclick="validate()">Validate with Gemini</button>
+<pre id="validation"></pre>
+<button onclick="download()">Generate PDF</button>
+
+<script src="/static/script.js"></script>
+
+</body>
+</html>

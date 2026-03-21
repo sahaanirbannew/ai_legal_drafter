@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+openai
+python-multipart
+jinja2
+reportlab
+faiss-cpu
+tiktoken
+python-dotenv
+google-generativeai
