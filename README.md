@@ -5,13 +5,14 @@ AI Legal Drafter is a FastAPI-based legal drafting system for analysing Indian c
 ## Features
 
 - Upload case PDFs and persist them as case records
-- Extract applicant, defendant, charges, and demands
-- Generate legal arguments with citation support
+- Extract applicant, defendant, court/forum, legal basis, charges, demands, and plan of action
+- Generate legal arguments with citation support and a filing strategy section
 - Prefer Supreme Court authorities over weaker High Court alternatives
-- Resolve Indian Kanoon citation links more carefully
+- Resolve citation links through an LLM-only link lookup step
 - Validate reasoning with Gemini 2.5 Flash
 - Revise drafts before user review
 - Let users edit, comment, finalise, and download the final argument PDF
+- Show the raw LLM citation-link response in the review UI
 
 ## Tech Stack
 
@@ -110,15 +111,17 @@ The app now:
 
 - prefers Supreme Court citations
 - refines candidate citations in a second pass
-- searches Indian Kanoon using `ruling + <case name>`
-- attempts to resolve a matching `/doc/<id>/` result based on the visible result title
-- falls back to a search link if a stronger match is not available
+- asks an LLM for a document link using the case name, court, and description
+- uses only validated LLM-returned links
+- leaves the citation link blank if the LLM does not return a validated result
+- shows the raw LLM response in the UI for inspection
 
 ## Notes
 
 - Runtime case data is stored in `agentic_app_data/`
 - Downloaded PDFs are written to the local `~/Downloads` folder
 - The Gemini SDK currently used in the project is deprecated upstream and should eventually be migrated
+- The app is designed to draft in simpler legalese while staying close to the wording of the source case papers
 
 ## License
 

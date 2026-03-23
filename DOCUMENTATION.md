@@ -9,9 +9,9 @@ The current system is built around a persisted `CaseState` and an orchestrated s
 ## Goals
 
 - Accept uploaded legal PDFs and convert them into a structured case record
-- Extract critical facts such as applicant, defendant, charges, and demands
-- Generate stronger, citation-backed legal arguments
-- Prefer Supreme Court authorities and validate citation links more carefully
+- Extract critical facts such as applicant, defendant, court/forum, legal basis, charges, demands, and plan of action
+- Generate stronger, citation-backed legal arguments in simpler legalese
+- Prefer Supreme Court authorities and resolve citation links through an LLM-only workflow
 - Review the draft with Gemini
 - Let the user edit, comment, finalise, and download a polished PDF
 
@@ -119,9 +119,12 @@ ai_legal_drafter/
 - Analysis agent extracts:
   - applicant
   - defendant/respondent
+  - forum
+  - authority to approach court
   - charges
   - demands
   - arguments
+  - plan of action
   - citations
 - Citation refinement runs after extraction
 - Drafting agent builds the initial legal argument text
@@ -137,6 +140,7 @@ ai_legal_drafter/
 
 - Revision agent rewrites the draft based on the validation report
 - It can consider humanitarian grounds, mental health, and the spirit of the law when supportable
+- It is instructed to write in easier legalese, stay closer to the source document’s wording, and argue like senior Supreme Court counsel for the applicant
 
 ### 5. Review and Finalise
 
@@ -147,6 +151,7 @@ ai_legal_drafter/
   - edited draft text
   - validation output
   - reviewer comments
+- Final output includes a `Plan of Action:` section stating whether the matter should proceed as a fresh petition or a revised petition, what remedy should be sought, and why
 
 ### 6. Export
 
@@ -233,7 +238,7 @@ Returns the persisted case state for the UI.
 
 ## Citation Resolution Logic
 
-The citation pipeline is intentionally stricter than the original implementation.
+The current citation pipeline is LLM-driven.
 
 ### Generation
 
@@ -256,20 +261,33 @@ A second OpenAI pass filters and reorders citations to:
 
 ### Link Resolution
 
-The app then constructs an Indian Kanoon search URL using:
+For each citation, the app sends a second prompt to the LLM using:
 
-`ruling + <case name>`
+- case name
+- court
+- citation description
 
-It fetches the result page and:
+Prompt shape:
 
-- extracts `/doc/<id>/` candidates
-- compares result titles against the target case name
-- selects the best-matching result title
-- falls back to a search URL if no sufficiently relevant direct result exists
+```text
+Give me the document link (preferably link to a pdf file) for the below description:
+<case name>
+Court: <court>
+Description: <description>
+
+Return in json format { "link": < all link here >, "validated": < True if you are sure that is the file > }
+```
+
+The resolver then:
+
+- parses the JSON response
+- accepts the link only when `validated` is `true`
+- leaves the citation link blank when the response is uncertain or malformed
+- stores the raw LLM response on the citation object for UI display
 
 ### Limitation
 
-Current validation is title-based on the search result page. It is stronger than “first `/doc/` hit wins”, but it is not yet a full document-page semantic verifier.
+This is intentionally not a deterministic court-database resolver. It depends on the LLM returning a usable and trusted document link. When the model is uncertain, the UI will now show no validated citation link rather than a fallback search URL.
 
 ## Frontend Review Workspace
 
@@ -278,6 +296,7 @@ Current validation is title-based on the search result page. It is stronger than
 - editable rich-text argument area
 - inline citation references
 - right-hand citation details panel
+- raw LLM citation-link response display
 - selection-based reviewer comments
 - validation summary
 - finalisation progress bar and logs
@@ -337,6 +356,7 @@ Core dependencies from `requirements.txt`:
 - Generated downloadable PDFs are written to the user’s `~/Downloads`
 - The current Gemini SDK is deprecated upstream; migration to `google.genai` is advisable
 - The current codebase still runs on Python 3.9, though newer Python versions are preferable
+- The drafting prompts are tuned to write in simpler legalese and remain closer to the language of the source document
 
 ## Known Improvement Areas
 
