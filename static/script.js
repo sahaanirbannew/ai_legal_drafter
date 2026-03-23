@@ -111,6 +111,7 @@ function escapeHtml(text) {
 
 function resetPipelineState() {
     pipelineCancelled = false
+    analysisReady = false
     validationReady = false
     currentCaseState = null
     citations = []
@@ -223,10 +224,13 @@ function renderCommentList() {
 
 function renderCaseSummary(analysis, draftText) {
     let demands = (analysis.demands || []).length ? analysis.demands.join("; ") : "Not extracted."
+    let charges = Array.isArray(analysis.charges) && analysis.charges.length
+        ? analysis.charges.join("; ")
+        : "Not extracted."
     let snapshot =
-        `Applicant: Not extracted.\n` +
-        `Defendant: Not extracted.\n` +
-        `Charges: Not extracted.\n` +
+        `Applicant: ${analysis.applicant || "Not extracted."}\n` +
+        `Defendant: ${analysis.defendant || "Not extracted."}\n` +
+        `Charges: ${charges}\n` +
         `Demands: ${demands}\n\n` +
         `Existing argument provided:\n${draftText || "Pending analysis."}`
     document.getElementById("caseSummary").innerText = snapshot
@@ -328,6 +332,7 @@ async function upload() {
         appendLog("Case processed successfully. Strategise is now available.", "Info")
         updateStatus("File uploaded and processed. Open Strategise to review the argument.")
         setStrategiseEnabled(true)
+        setDownloadEnabled(true)
         showArgumentScreen()
 
         let valResult = await validate()
@@ -374,11 +379,24 @@ async function generate() {
         citations = data.citations || []
 
         let caseState = await fetchCaseState()
+        if (!caseState || !caseState.analysis) {
+            throw new Error("Structured case analysis was not available.")
+        }
+
+        let analysis = caseState.analysis
+        let hasRequiredExtraction =
+            normaliseText(analysis.applicant).length > 0 &&
+            normaliseText(analysis.defendant).length > 0 &&
+            Array.isArray(analysis.charges) && analysis.charges.length > 0 &&
+            Array.isArray(analysis.demands) && analysis.demands.length > 0
+
+        if (!hasRequiredExtraction) {
+            throw new Error("Required case details were not fully extracted.")
+        }
+
         let draftText = (caseState && caseState.draft_text) || data.text || ""
         renderEditor(draftText, citations)
-        if (caseState && caseState.analysis) {
-            renderCaseSummary(caseState.analysis, draftText)
-        }
+        renderCaseSummary(analysis, draftText)
 
         return { success: true }
     } catch (err) {
@@ -528,7 +546,7 @@ async function finalizeAndDownload() {
         return { success: false }
     } finally {
         finalizeInProgress = false
-        setDownloadEnabled(validationReady)
+        setDownloadEnabled(analysisReady)
     }
 }
 

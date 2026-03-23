@@ -5,6 +5,8 @@ import logging
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
+import re
+import urllib.request
 from urllib.parse import quote_plus
 
 logger = logging.getLogger('ai_legal_drafter.openai_client')
@@ -20,7 +22,78 @@ client = OpenAI(api_key=openai_api_key)
 
 
 def _build_indiankanoon_search_link(case_name: str) -> str:
-    return f"https://indiankanoon.org/search/?formInput={quote_plus(case_name)}"
+    return f"https://indiankanoon.org/search/?formInput={quote_plus('ruling + ' + case_name)}"
+
+
+def _normalise_case_text(text: str) -> str:
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _case_match_score(expected_case_name: str, candidate_title: str) -> int:
+    expected = _normalise_case_text(expected_case_name)
+    candidate = _normalise_case_text(candidate_title)
+    if not expected or not candidate:
+        return 0
+
+    expected_tokens = {token for token in expected.split() if len(token) > 2}
+    candidate_tokens = set(candidate.split())
+    overlap = expected_tokens & candidate_tokens
+    score = len(overlap)
+
+    if expected in candidate:
+        score += 100
+
+    return score
+
+
+def _fetch_resolved_indiankanoon_doc_link(case_name: str) -> tuple[str, bool, str]:
+    search_link = _build_indiankanoon_search_link(case_name)
+    request = urllib.request.Request(search_link, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+    except Exception as exc:
+        logger.warning("Indian Kanoon resolution failed for %s: %s", case_name, exc)
+        return search_link, False, "Search link provided because the Indian Kanoon result page could not be resolved."
+
+    candidates = re.findall(r'<a[^>]+href="(/doc/\d+/)"[^>]*>(.*?)</a>', html, flags=re.IGNORECASE | re.DOTALL)
+    ranked_candidates = []
+    for href, anchor_html in candidates:
+        title = re.sub(r"<[^>]+>", " ", anchor_html)
+        title = re.sub(r"\s+", " ", title).strip()
+        score = _case_match_score(case_name, title)
+        if score > 0:
+            ranked_candidates.append((score, href, title))
+
+    if not ranked_candidates:
+        return search_link, False, "Search link provided because no direct Indian Kanoon document result was found."
+
+    ranked_candidates.sort(key=lambda item: item[0], reverse=True)
+    _, best_href, best_title = ranked_candidates[0]
+
+    return (
+        f"https://indiankanoon.org{best_href}",
+        True,
+        f"Direct Indian Kanoon document link resolved from a matching search result title: {best_title}.",
+    )
+
+
+def _ensure_required_case_fields(analysis: dict) -> dict:
+    defaults = {
+        "applicant": "Not clearly named in the extracted materials.",
+        "defendant": "Not clearly named in the extracted materials.",
+        "charges": ["Not clearly identified from the extracted materials."],
+        "demands": ["No demand extracted."],
+        "arguments": [],
+        "citations": [],
+    }
+    for key, default_value in defaults.items():
+        if key not in analysis or analysis[key] in (None, "", []):
+            analysis[key] = default_value
+    return analysis
 
 
 def _sort_and_normalize_citations(citations: list[dict]) -> list[dict]:
@@ -39,14 +112,16 @@ def _sort_and_normalize_citations(citations: list[dict]) -> list[dict]:
         link = str(citation.get("link", "") or "").strip()
         link_verified = bool(citation.get("link_verified", False))
 
-        # Prefer safe search links unless the model explicitly says the direct link is verified.
-        if not link or ("indiankanoon.org/doc/" in link and not link_verified):
-            citation["link"] = _build_indiankanoon_search_link(case_name)
-            citation["link_note"] = citation.get(
-                "link_note",
-                "Search link provided because an exact court-consistent document URL was not confidently verified.",
-            )
-            citation["link_verified"] = False
+        resolved_link, resolved_verified, resolved_note = _fetch_resolved_indiankanoon_doc_link(case_name)
+
+        if link_verified and "indiankanoon.org/doc/" in link:
+            citation["link"] = link
+            citation["link_note"] = citation.get("link_note", "Direct link supplied and marked verified.")
+            citation["link_verified"] = True
+        else:
+            citation["link"] = resolved_link
+            citation["link_note"] = resolved_note
+            citation["link_verified"] = resolved_verified
 
         normalized.append(citation)
 
@@ -111,14 +186,20 @@ You are a senior Indian constitutional lawyer.
 Analyse the uploaded legal document and respond ONLY in JSON.
 
 Tasks:
-1. Identify the applicant's demands.
-2. Suggest better legal arguments to strengthen the applicant's case.
-3. Suggest if "Non-application of mind" can be argued.
-4. Find relevant Supreme Court or High Court citations.
+1. Identify the applicant.
+2. Identify the defendant/respondent.
+3. Identify the charges/offences involved.
+4. Identify the applicant's demands.
+5. Suggest better legal arguments to strengthen the applicant's case.
+6. Suggest if "Non-application of mind" can be argued.
+7. Find relevant Supreme Court or High Court citations.
 
 Return JSON format:
 
 {
+ "applicant": "",
+ "defendant": "",
+ "charges": [],
  "demands": [],
  "arguments": [],
  "citations":[
@@ -144,6 +225,7 @@ Strongly prefer Supreme Court of India cases.
 Use High Court cases sparingly and only when they are uniquely relevant.
 Do not invent Indian Kanoon document ids.
 If you are unsure of the exact document URL, provide an Indian Kanoon search URL for the exact case name instead of a direct document link.
+Do not leave applicant, defendant, or charges blank. If the document is unclear, provide the best supported extraction or inference from the text.
 """
 
         response = client.responses.create(
@@ -158,7 +240,7 @@ If you are unsure of the exact document URL, provide an Indian Kanoon search URL
         )
 
         logger.debug('analyze_case OpenAI response: %s', response)
-        analysis = json.loads(response.output_text)
+        analysis = _ensure_required_case_fields(json.loads(response.output_text))
         analysis["citations"] = _validate_and_refine_citations(analysis.get("citations", []))
         return analysis
     except Exception as e:
