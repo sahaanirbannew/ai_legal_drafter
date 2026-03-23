@@ -2,126 +2,488 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI Legal Argument Assistant</title>
+    <title>AI Law Intern</title>
     <style>
+        :root {
+            --bg: #eef4fb;
+            --panel: #f8fbff;
+            --box: #ffffff;
+            --text: #17304f;
+            --muted: #537091;
+            --line: #b7c8de;
+            --accent: #2f64a7;
+            --accent-soft: #deebff;
+            --accent-strong: #1d4f8f;
+            --info: #1f8a43;
+            --info-soft: #e7f7ec;
+            --warn: #9e2f2f;
+            --warn-soft: #fdeaea;
+        }
+
+        * { box-sizing: border-box; }
+
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: #f5f7fb;
+            margin: 0;
+            min-height: 100vh;
+            font-family: Georgia, "Times New Roman", serif;
+            color: var(--text);
+            background: linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+        }
+
+        .app-shell {
+            display: flex;
+            min-height: 100vh;
+            padding: 24px;
+            gap: 22px;
+        }
+
+        .side-panel {
+            width: 255px;
+            background: var(--panel);
+            border: 2px solid var(--line);
+            padding: 22px 14px 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .nav-group, .nav-footer {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel-link {
+            display: block;
+            width: 100%;
+            padding: 18px 12px;
+            text-align: center;
+            text-decoration: none;
+            color: var(--text);
+            background: #fdfefe;
+            border: 2px solid var(--line);
+            font-size: 22px;
+            line-height: 1.15;
+        }
+
+        .main-stage {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 14px 0 30px;
+        }
+
+        .brand {
+            margin: 14px 0 34px;
+            font-size: clamp(40px, 5vw, 62px);
+            font-weight: 700;
+            color: #42658f;
+            letter-spacing: -0.03em;
+        }
+
+        .screen {
+            width: min(100%, 1320px);
+        }
+
+        .hidden { display: none !important; }
+
+        .primary-action, .secondary-action, .nav-button, .toolbar button {
+            border: 2px solid var(--line);
+            background: #f9fcff;
+            color: var(--text);
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        .primary-action:disabled, .secondary-action:disabled, .nav-button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .file-picker {
+            margin-bottom: 18px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .file-picker input {
+            width: 100%;
+            max-width: 500px;
+            font-size: 16px;
+        }
+
+        .primary-action, .secondary-action {
+            width: 100%;
+            font-size: clamp(24px, 3vw, 34px);
+            padding: 12px 18px;
+        }
+
+        .status-card {
+            margin-top: 28px;
+            background: var(--box);
+            border: 2px solid var(--line);
+            min-height: 480px;
+            padding: 18px 18px 24px;
+        }
+
+        .status-header, .section-title {
+            margin: 0 0 14px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+
+        .status-summary {
+            margin: 0 0 16px;
+            min-height: 26px;
+            font-size: 16px;
+        }
+
+        .detail-log {
             margin: 0;
             padding: 0;
-            color: #1e293b;
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 360px;
+            overflow: auto;
         }
-        .container {
-            max-width: 900px;
-            margin: 24px auto;
+
+        .detail-log li {
+            border-bottom: 1px solid rgba(95, 90, 84, 0.2);
+            padding-bottom: 8px;
+            font-size: 15px;
+            line-height: 1.4;
+        }
+
+        .log-time { color: var(--muted); margin-right: 8px; }
+        .log-level { font-weight: 700; margin-right: 8px; }
+        .log-level.info { color: #3d4b67; }
+        .log-level.debug { color: #756a55; }
+        .log-level.error { color: var(--warn); }
+
+        .screen-footer, .screen-nav { margin-top: 14px; }
+        .screen-nav { display: flex; gap: 12px; }
+        .nav-button { flex: 1; padding: 12px 14px; font-size: 18px; }
+
+        #spinner { margin-left: 10px; font-size: 16px; color: var(--muted); }
+
+        .review-layout {
+            display: grid;
+            grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.95fr);
+            gap: 24px;
+            align-items: start;
+        }
+
+        .left-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .review-card, .side-card {
+            background: var(--box);
+            border: 2px solid var(--line);
             padding: 16px;
         }
-        .card {
-            background: #ffffff;
-            border: 1px solid #e2e8f0;
-            border-radius: 12px;
-            box-shadow: 0 4px 12px rgba(15, 23, 42, .08);
-            margin-bottom: 16px;
-            padding: 18px;
-        }
-        h1 {
-            margin-bottom: 8px;
-            color: #0f172a;
-        }
-        .actions button {
-            margin: 4px 6px 4px 0;
-            padding: 10px 14px;
-            border: none;
-            border-radius: 8px;
-            background: #2563eb;
-            color: #fff;
-            cursor: pointer;
-            font-size: 14px;
-        }
-        .actions button:disabled {
-            opacity: 0.5;
-            background: #94a3b8;
-            cursor: not-allowed;
-        }
-        #status {
-            margin: 10px 0;
-            font-weight: bold;
-            min-height: 24px;
-        }
-        pre {
-            background: #f8fafc;
-            color: #0f172a;
-            border: 1px solid #cbd5e1;
-            border-radius: 10px;
-            padding: 12px;
-            overflow: auto;
-            max-height: 260px;
+
+        .summary-block {
+            font-size: 16px;
+            line-height: 1.45;
             white-space: pre-wrap;
-            word-wrap: break-word;
         }
-        #citations button {
-            border: 1px solid #bfdbfe;
-            background: #eff6ff;
-            color: #1d4ed8;
-            margin: 4px 6px 4px 0;
-            border-radius: 8px;
-            padding: 6px 10px;
+
+        .editor-shell {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
-        #spinner {
-            display: inline-block;
-            margin-top: 8px;
-            color: #1d4ed8;
-            font-weight: bold;
+
+        .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
         }
-        .hidden {
-            display: none;
+
+        .toolbar button {
+            padding: 8px 12px;
+            font-size: 14px;
+            background: #f6faff;
         }
-        #log {
-            max-height: 220px;
+
+        .editor {
+            min-height: 340px;
+            max-height: 520px;
             overflow: auto;
-            background: #0f172a;
-            color: #f8fafc;
-            font-size: 13px;
+            padding: 18px;
+            border: 2px solid rgba(143, 139, 133, 0.5);
+            background: #fcfeff;
+            font-size: 17px;
+            line-height: 1.65;
+            outline: none;
+            box-shadow: inset 0 0 0 1px rgba(255,255,255,0.7);
+        }
+
+        .editor p {
+            margin: 0 0 1em;
+        }
+
+        .citation-ref {
+            color: var(--accent);
+            background: var(--accent-soft);
+            border-radius: 999px;
+            padding: 0 6px;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .citation-ref.active {
+            background: #c5dbff;
+        }
+
+        .selection-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+            font-size: 14px;
+            color: var(--muted);
+        }
+
+        .selection-chip {
+            max-width: 100%;
+            padding: 8px 10px;
+            border: 1px dashed var(--line);
+            background: #f7fbff;
+        }
+
+        .comment-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .comment-form textarea {
+            min-height: 90px;
+            resize: vertical;
+            border: 2px solid rgba(143, 139, 133, 0.5);
+            background: #fcfeff;
+            padding: 12px;
+            font-family: inherit;
+            font-size: 15px;
+        }
+
+        .comment-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-top: 16px;
+        }
+
+        .comment-item, .citation-panel, .validation-panel {
+            padding: 12px;
+            border: 1px solid rgba(95, 90, 84, 0.22);
+            background: #f8fbff;
+        }
+
+        .comment-item strong, .citation-panel strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .download-button {
+            width: 100%;
+            margin-top: 4px;
+            padding: 12px 18px;
+            font-size: 34px;
+        }
+
+        .muted-note {
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        .log-level {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+        }
+
+        .log-level.info {
+            color: var(--info);
+            background: var(--info-soft);
+        }
+
+        .log-level.debug {
+            color: var(--accent-strong);
+            background: var(--accent-soft);
+        }
+
+        .log-level.error {
+            color: var(--warn);
+            background: var(--warn-soft);
+        }
+
+        .finalize-status {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 14px;
+            border: 1px solid var(--line);
+            background: #edf5ff;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #70a5e8 0%, #2f64a7 100%);
+            transition: width 0.3s ease;
+        }
+
+        .finalize-log {
+            margin: 0;
+            padding-left: 18px;
+            max-height: 170px;
+            overflow: auto;
+            color: var(--muted);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 1080px) {
+            .review-layout {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 900px) {
+            .app-shell {
+                flex-direction: column;
+                padding: 16px;
+            }
+
+            .side-panel {
+                width: 100%;
+            }
+
+            .brand {
+                margin: 8px 0 24px;
+                text-align: center;
+            }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="card">
-            <h1>AI Legal Argument Assistant</h1>
-            <p>Upload a case PDF, generate arguments, validate with Gemini, then download a report.</p>
-            <div class="actions">
-                <input type="file" id="file" accept="application/pdf" style="margin-right: 10px;" />
-                <button id="uploadBtn" onclick="upload()">Upload</button>
-                <button id="generateBtn" onclick="generate()">Generate Argument</button>
-                <button id="validateBtn" onclick="validate()">Validate with Gemini</button>
-                <button id="downloadBtn" onclick="download()">Generate PDF</button>
-                <button id="cancelBtn" onclick="cancelPipeline()" style="background:#ef4444;">Cancel Pipeline</button>
+    <div class="app-shell">
+        <aside class="side-panel">
+            <div class="nav-group">
+                <a class="panel-link" href="#">Analyse<br />Chargesheet</a>
             </div>
-            <div id="status"></div>
-            <div id="spinner" class="hidden">⏳ Processing...</div>
-        </div>
+            <div class="nav-footer">
+                <a class="panel-link" href="#">History</a>
+                <a class="panel-link" href="#">Settings</a>
+                <a class="panel-link" href="#">Logout</a>
+            </div>
+        </aside>
 
-        <div class="card">
-            <h2>Generated Argument</h2>
-            <pre id="output">No generated argument yet. Click 'Generate Argument'.</pre>
-        </div>
+        <main class="main-stage">
+            <h1 class="brand">AI Law Intern</h1>
 
-        <div class="card">
-            <h2>Citations</h2>
-            <div id="citations">No citations yet. Generate first.</div>
-        </div>
+            <section id="uploadScreen" class="screen">
+                <div class="file-picker">
+                    <input type="file" id="file" accept="application/pdf" />
+                </div>
 
-        <div class="card">
-            <h2>Validation Report</h2>
-            <pre id="validation">No validation result yet.</pre>
-        </div>
+                <button id="uploadBtn" class="primary-action" onclick="upload()">Upload &amp; Analyse..</button>
 
-        <div class="card">
-            <h2>Execution Log</h2>
-            <pre id="log">[ready]</pre>
-        </div>
+                <div class="status-card">
+                    <h2 class="status-header">Progress status:</h2>
+                    <div id="status" class="status-summary">Waiting for file upload.</div>
+                    <div id="spinner" class="hidden">Processing...</div>
+                    <ol id="log" class="detail-log">
+                        <li><span class="log-time">System</span><span class="log-level info">Info</span>UI ready for upload.</li>
+                    </ol>
+                </div>
+                <div class="screen-footer">
+                    <button id="strategiseBtn" class="secondary-action" onclick="showArgumentScreen()" disabled>Strategise</button>
+                </div>
+            </section>
 
+            <section id="argumentScreen" class="screen hidden">
+                <div class="review-layout">
+                    <div class="left-stack">
+                        <div class="review-card">
+                            <h2 class="section-title">Case Snapshot</h2>
+                            <div id="caseSummary" class="summary-block">Applicant: Not yet extracted.
+Defendant: Not yet extracted.
+Charges: Not yet extracted.
+Demands: Not yet extracted.
+
+Existing argument provided: Pending analysis.</div>
+                        </div>
+
+                        <div class="review-card editor-shell">
+                            <h2 class="section-title">Proposed argument</h2>
+                            <div class="toolbar">
+                                <button type="button" onclick="applyEditorCommand('bold')">Bold</button>
+                                <button type="button" onclick="applyEditorCommand('italic')">Italic</button>
+                                <button type="button" onclick="applyEditorCommand('insertUnorderedList')">Bullet List</button>
+                                <button type="button" onclick="applyEditorCommand('formatBlock', 'blockquote')">Quote</button>
+                            </div>
+                            <div id="argumentEditor" class="editor" contenteditable="true"></div>
+                            <div class="selection-bar">
+                                <button type="button" class="nav-button" onclick="captureSelection()">Capture Selection</button>
+                                <div id="selectedExcerpt" class="selection-chip">No text selected.</div>
+                            </div>
+                        </div>
+
+                        <button id="downloadBtn" class="primary-action download-button" onclick="finalizeAndDownload()" disabled>Finalise and Download</button>
+                        <div class="finalize-status">
+                            <div class="progress-track">
+                                <div id="downloadProgressBar" class="progress-fill"></div>
+                            </div>
+                            <div id="downloadProgressLabel" class="muted-note">Waiting to finalise.</div>
+                            <ol id="downloadLog" class="finalize-log">
+                                <li>No download activity yet.</li>
+                            </ol>
+                        </div>
+                    </div>
+
+                    <div class="side-card">
+                        <h2 class="section-title">Comments, citations, notes</h2>
+                        <div id="citationDetails" class="citation-panel">Click a citation inside the argument to view its details here.</div>
+                        <div class="validation-panel" style="margin-top: 14px;">
+                            <strong>Validation Summary</strong>
+                            <div id="validationSummary" class="muted-note">No validation result yet.</div>
+                        </div>
+
+                        <div class="comment-form">
+                            <label for="commentInput"><strong>Add comment to selected text</strong></label>
+                            <textarea id="commentInput" placeholder="Select a section from the draft, then write your note or instruction here."></textarea>
+                            <button type="button" class="nav-button" onclick="addComment()">Add Comment</button>
+                        </div>
+
+                        <div id="commentList" class="comment-list">
+                            <div class="muted-note">No comments added yet.</div>
+                        </div>
+
+                        <div class="screen-nav">
+                            <button class="nav-button" onclick="showUploadScreen()">Back</button>
+                            <button id="cancelBtn" class="nav-button" onclick="cancelPipeline()">Cancel Pipeline</button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
     </div>
 
     <script src="/static/script.js"></script>

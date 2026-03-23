@@ -1,18 +1,13 @@
 from fastapi import FastAPI, UploadFile
+from pydantic import BaseModel
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
-import shutil
-import os
-import logging
 import asyncio
 import uuid
-from datetime import datetime
-from dotenv import load_dotenv
-from gemini_validator import validate_case
-from openai import OpenAI
-from openai_client import analyze_case
-from prompt import build_argument
-from pdf_generator import create_pdf
+import os
+import logging
+
+from agentic_app.orchestrator import CaseWorkflowOrchestrator
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -24,42 +19,32 @@ logger = logging.getLogger('ai_legal_drafter')
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Load .env and read OPENAI_API_KEY
-load_dotenv()
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file or environment variables.")
-
-client = OpenAI(api_key=openai_api_key)
+orchestrator = CaseWorkflowOrchestrator()
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
     with open("templates/index.html", "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
-file_id_store = None
-case_json_store = None
-generated_text = None
-original_case_path = None
 validation_tasks = {}  # {task_id: {"status": "pending|complete|error", "result": ..., "error": ...}}
+
+
+class CaseRequest(BaseModel):
+    case_id: str
+
+
+class FinalizeRequest(BaseModel):
+    case_id: str
+    edited_text: str
+    comments: list[dict] = []
 
 @app.post("/oovalidate")
 async def oovalidate():
     logger.info('oovalidate started')
     try:
-        if not case_json_store:
-            raise ValueError('case_json_store missing; run analyze first')
-        if not original_case_path or not os.path.exists(original_case_path):
-            raise ValueError('Original uploaded case PDF not found; upload should be run first')
-
-        result = validate_case(
-            original_case_path,
-            "output_case.pdf",
-            case_json_store
-        )
-
+        raise ValueError('Direct validation without case_id is no longer supported')
         logger.info('oovalidate completed successfully')
-        return {"validation": result}
+        return {"validation": ""}
     except Exception as e:
         logger.error('oovalidate failed: %s', e, exc_info=True)
         return {"status": "error", "message": str(e)}
@@ -69,27 +54,15 @@ async def _run_validation_task(task_id):
     """Background task to run validation"""
     logger.info('Validation background task started for task_id=%s', task_id)
     try:
-        if not case_json_store or not generated_text:
-            raise ValueError('case_json_store or generated_text missing; run analyze first')
-        if not original_case_path or not os.path.exists(original_case_path):
-            raise ValueError('Original uploaded case PDF not found; upload should be run first')
-
-        validation = validate_case(
-            original_case_path,
-            "output_case.pdf",
-            case_json_store
-        )
-
-        logger.debug('Gemini validate_case result: %s', validation)
-
-        # combine and store validation report in a PDF
-        validation_text = f"\n\nVALIDATION REPORT\n\n{validation}"
-        final_text = generated_text + validation_text
-        create_pdf(final_text, "validated_case.pdf")
+        task_info = validation_tasks[task_id]
+        case_id = task_info["case_id"]
+        case_state = orchestrator.validate(case_id)
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "Validation failed")
 
         validation_tasks[task_id] = {
             "status": "complete",
-            "result": validation
+            "result": case_state.validation_data or case_state.validation_text
         }
         logger.info('Validation task completed for task_id=%s', task_id)
 
@@ -102,14 +75,14 @@ async def _run_validation_task(task_id):
 
 
 @app.post("/validate/start")
-async def validate_start():
+async def validate_start(request: CaseRequest):
     """Start validation task in background"""
     logger.info('Validation start endpoint called')
     try:
         task_id = str(uuid.uuid4())
         logger.info('Created task_id=%s for validation', task_id)
 
-        validation_tasks[task_id] = {"status": "pending"}
+        validation_tasks[task_id] = {"status": "pending", "case_id": request.case_id}
 
         # Start background task
         asyncio.create_task(_run_validation_task(task_id))
@@ -146,30 +119,11 @@ async def validate_status(task_id: str):
 async def upload(file: UploadFile):
     logger.info('Upload started')
     try:
-        uploads_dir = "uploads"
-        os.makedirs(uploads_dir, exist_ok=True)
-
-        path = os.path.join(uploads_dir, file.filename)
-        logger.debug('Saving uploaded file to %s', path)
-
-        with open(path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        logger.info('File saved locally')
-
-        uploaded = client.files.create(
-            file=open(path, "rb"),
-            purpose="assistants"
-        )
-        logger.info('Uploaded file to OpenAI with id %s', uploaded.id)
-
-        global file_id_store
-        global original_case_path
-        file_id_store = uploaded.id
-        original_case_path = path
-
-        logger.info('Upload completed successfully; original_case_path=%s', original_case_path)
-        return {"status": "uploaded"}
+        case_state = orchestrator.ingest_upload(file.filename, file.file)
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "Upload failed")
+        logger.info('Upload completed successfully; case_id=%s', case_state.case_id)
+        return {"status": "uploaded", "case_id": case_state.case_id}
 
     except Exception as e:
         logger.error('Upload failed: %s', e, exc_info=True)
@@ -177,25 +131,21 @@ async def upload(file: UploadFile):
 
 
 @app.post("/analyze")
-async def analyze():
+async def analyze(request: CaseRequest):
     logger.info('Analysis started')
     try:
-        global case_json_store
-        global generated_text
-
-        if not file_id_store:
-            raise ValueError('file_id_store is empty, upload must be done first')
-
-        logger.debug('Calling analyze_case with file_id %s', file_id_store)
-        case_json_store = analyze_case(file_id_store)
-
-        logger.debug('Building argument text')
-        generated_text = build_argument(case_json_store)
+        case_state = orchestrator.analyze(request.case_id)
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "Analysis failed")
+        case_state = orchestrator.draft(request.case_id)
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "Drafting failed")
 
         logger.info('Analysis completed successfully')
         return {
-            "text": generated_text,
-            "citations": case_json_store["citations"]
+            "text": case_state.draft_text,
+            "citations": case_state.analysis["citations"],
+            "case_id": case_state.case_id,
         }
 
     except Exception as e:
@@ -207,14 +157,7 @@ async def analyze():
 async def oogenerate_pdf():
     logger.info('oogenerate_pdf started')
     try:
-        if not generated_text:
-            raise ValueError('generated_text is empty; run analyze first')
-
-        path = "output_case.pdf"
-        create_pdf(generated_text, path)
-
-        logger.info('oogenerate_pdf completed successfully: %s', path)
-        return {"pdf": path}
+        raise ValueError('Direct PDF generation without case_id is no longer supported')
 
     except Exception as e:
         logger.error('oogenerate_pdf failed: %s', e, exc_info=True)
@@ -222,20 +165,15 @@ async def oogenerate_pdf():
 
 
 @app.post("/generate_pdf")
-async def generate_pdf():
+async def generate_pdf(request: CaseRequest):
     logger.info('generate_pdf started')
     try:
-        if not generated_text:
-            raise ValueError('generated_text is empty; run analyze first')
+        case_state = orchestrator.generate_outputs(request.case_id)
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "PDF generation failed")
 
-        downloads_dir = os.path.expanduser("~/Downloads")
-        os.makedirs(downloads_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"legal_argument_{timestamp}.pdf"
-        path = os.path.join(downloads_dir, filename)
-
-        create_pdf(generated_text, path)
-
+        path = case_state.artifacts["download_pdf"]
+        filename = os.path.basename(path)
         logger.info('generate_pdf completed successfully: %s', path)
         return FileResponse(
             path,
@@ -245,4 +183,40 @@ async def generate_pdf():
 
     except Exception as e:
         logger.error('generate_pdf failed: %s', e, exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/finalize_pdf")
+async def finalize_pdf(request: FinalizeRequest):
+    logger.info('finalize_pdf started')
+    try:
+        case_state = orchestrator.finalize_and_generate(
+            request.case_id,
+            request.edited_text,
+            request.comments,
+        )
+        if case_state.status == "error":
+            raise ValueError(case_state.errors[-1] if case_state.errors else "Finalization failed")
+
+        path = case_state.artifacts["download_pdf"]
+        filename = os.path.basename(path)
+        logger.info('finalize_pdf completed successfully: %s', path)
+        return FileResponse(
+            path,
+            media_type="application/pdf",
+            filename=filename
+        )
+    except Exception as e:
+        logger.error('finalize_pdf failed: %s', e, exc_info=True)
+        return {"status": "error", "message": str(e)}
+
+
+@app.get("/cases/{case_id}")
+async def get_case(case_id: str):
+    logger.debug('Fetching case state for case_id=%s', case_id)
+    try:
+        case_state = orchestrator.get_case(case_id)
+        return case_state.to_dict()
+    except Exception as e:
+        logger.error('get_case failed: %s', e, exc_info=True)
         return {"status": "error", "message": str(e)}
