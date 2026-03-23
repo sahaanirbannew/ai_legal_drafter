@@ -5,9 +5,7 @@ import logging
 from dotenv import load_dotenv
 from openai import OpenAI
 import json
-import re
-import urllib.request
-from urllib.parse import quote_plus
+from typing import Optional
 
 logger = logging.getLogger('ai_legal_drafter.openai_client')
 
@@ -21,73 +19,51 @@ if not openai_api_key:
 client = OpenAI(api_key=openai_api_key)
 
 
-def _build_indiankanoon_search_link(case_name: str) -> str:
-    return f"https://indiankanoon.org/search/?formInput={quote_plus('ruling + ' + case_name)}"
+def _resolve_link_from_description(citation: dict) -> tuple[Optional[str], bool, str, str, str]:
+    case_name = str(citation.get("case_name", "")).strip()
+    court = str(citation.get("court", "")).strip()
+    description = str(citation.get("description", "")).strip()
 
+    description_payload = f"""{case_name}
+Court: {court}
+Description: {description}"""
+    prompt = f"""Give me the document link (preferably link to a pdf file) for the below description:
+{description_payload}
 
-def _normalise_case_text(text: str) -> str:
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+Return in json format {{ "link": < all link here >, "validated": < True if you are sure that is the file > }}
+"""
 
-
-def _case_match_score(expected_case_name: str, candidate_title: str) -> int:
-    expected = _normalise_case_text(expected_case_name)
-    candidate = _normalise_case_text(candidate_title)
-    if not expected or not candidate:
-        return 0
-
-    expected_tokens = {token for token in expected.split() if len(token) > 2}
-    candidate_tokens = set(candidate.split())
-    overlap = expected_tokens & candidate_tokens
-    score = len(overlap)
-
-    if expected in candidate:
-        score += 100
-
-    return score
-
-
-def _fetch_resolved_indiankanoon_doc_link(case_name: str) -> tuple[str, bool, str]:
-    search_link = _build_indiankanoon_search_link(case_name)
-    request = urllib.request.Request(search_link, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            html = response.read().decode("utf-8", errors="ignore")
+        response = client.responses.create(
+            model="gpt-5",
+            input=prompt,
+        )
+        raw_response = response.output_text.strip()
+        parsed = json.loads(raw_response)
+        link = str(parsed.get("link", "") or "").strip()
+        validated = bool(parsed.get("validated", False))
+        if not link:
+            return None, False, "No document link was returned by the LLM.", raw_response, prompt
+        return link, validated, "Link resolved from citation description via LLM.", raw_response, prompt
     except Exception as exc:
-        logger.warning("Indian Kanoon resolution failed for %s: %s", case_name, exc)
-        return search_link, False, "Search link provided because the Indian Kanoon result page could not be resolved."
-
-    candidates = re.findall(r'<a[^>]+href="(/doc/\d+/)"[^>]*>(.*?)</a>', html, flags=re.IGNORECASE | re.DOTALL)
-    ranked_candidates = []
-    for href, anchor_html in candidates:
-        title = re.sub(r"<[^>]+>", " ", anchor_html)
-        title = re.sub(r"\s+", " ", title).strip()
-        score = _case_match_score(case_name, title)
-        if score > 0:
-            ranked_candidates.append((score, href, title))
-
-    if not ranked_candidates:
-        return search_link, False, "Search link provided because no direct Indian Kanoon document result was found."
-
-    ranked_candidates.sort(key=lambda item: item[0], reverse=True)
-    _, best_href, best_title = ranked_candidates[0]
-
-    return (
-        f"https://indiankanoon.org{best_href}",
-        True,
-        f"Direct Indian Kanoon document link resolved from a matching search result title: {best_title}.",
-    )
+        logger.warning("Description-based link resolution failed for %s: %s", case_name, exc)
+        return None, False, "Description-based link resolution failed.", str(exc), prompt
 
 
 def _ensure_required_case_fields(analysis: dict) -> dict:
     defaults = {
         "applicant": "Not clearly named in the extracted materials.",
         "defendant": "Not clearly named in the extracted materials.",
+        "forum": "Appropriate court/forum to be stated from the case papers.",
+        "authority_to_approach_court": "Jurisdictional basis to be stated from the case papers.",
         "charges": ["Not clearly identified from the extracted materials."],
         "demands": ["No demand extracted."],
         "arguments": [],
+        "plan_of_action": {
+            "filing_recommendation": "State whether this should proceed as a fresh petition or revised petition.",
+            "recommended_remedy": "State the principal relief that should be sought.",
+            "reasons": ["State the legal and factual reasons for that course."],
+        },
         "citations": [],
     }
     for key, default_value in defaults.items():
@@ -105,23 +81,21 @@ def _sort_and_normalize_citations(citations: list[dict]) -> list[dict]:
 
     normalized = []
     for citation in sorted(citations, key=court_rank):
-        case_name = citation.get("case_name", "").strip()
-        if not case_name:
+        if not citation.get("case_name", "").strip():
             continue
 
-        link = str(citation.get("link", "") or "").strip()
-        link_verified = bool(citation.get("link_verified", False))
+        llm_link, llm_validated, llm_note, llm_raw_response, llm_prompt = _resolve_link_from_description(citation)
+        citation["llm_link_prompt"] = llm_prompt
+        citation["llm_link_response"] = llm_raw_response
 
-        resolved_link, resolved_verified, resolved_note = _fetch_resolved_indiankanoon_doc_link(case_name)
-
-        if link_verified and "indiankanoon.org/doc/" in link:
-            citation["link"] = link
-            citation["link_note"] = citation.get("link_note", "Direct link supplied and marked verified.")
+        if llm_link and llm_validated:
+            citation["link"] = llm_link
+            citation["link_note"] = llm_note
             citation["link_verified"] = True
         else:
-            citation["link"] = resolved_link
-            citation["link_note"] = resolved_note
-            citation["link_verified"] = resolved_verified
+            citation["link"] = ""
+            citation["link_note"] = llm_note if llm_link else "No validated citation link was returned by the LLM."
+            citation["link_verified"] = False
 
         normalized.append(citation)
 
@@ -143,7 +117,8 @@ Rules:
 - Use High Court authorities only when especially relevant and when Supreme Court authority is insufficient.
 - Ensure the case name and court are consistent.
 - If you are not highly confident about an exact direct document URL, do NOT invent a direct link.
-- When exact document-link certainty is low, provide an Indian Kanoon search URL using the exact case name.
+- Do not provide Indian Kanoon search links or fallback search URLs.
+- If exact document-link certainty is low, leave the link blank and mark it unverified.
 - Return no more than 5 citations.
 
 Return ONLY valid JSON with this format:
@@ -181,27 +156,39 @@ def analyze_case(file_id):
     logger.info('analyze_case called with file_id=%s', file_id)
     try:
         prompt = """
-You are a senior Indian constitutional lawyer.
+You are a senior Supreme Court lawyer in India representing the applicant.
 
 Analyse the uploaded legal document and respond ONLY in JSON.
 
 Tasks:
 1. Identify the applicant.
 2. Identify the defendant/respondent.
-3. Identify the charges/offences involved.
-4. Identify the applicant's demands.
-5. Suggest better legal arguments to strengthen the applicant's case.
-6. Suggest if "Non-application of mind" can be argued.
-7. Find relevant Supreme Court or High Court citations.
+3. Identify the court/forum being approached in the document.
+4. Identify under what legal authority, provision, jurisdiction, or procedural route the applicant has come to that court.
+5. Identify the charges/offences involved.
+6. Identify the applicant's demands.
+7. Suggest better legal arguments to strengthen the applicant's case.
+8. Suggest if "Non-application of mind" can be argued.
+9. State a clear plan of action: whether this should proceed as a new petition or a revised petition.
+10. State the most appropriate remedy to be sought in this case.
+11. Give reasons for that procedural and remedial choice, preferably supported by the cited authorities.
+12. Find relevant Supreme Court or High Court citations.
 
 Return JSON format:
 
 {
  "applicant": "",
  "defendant": "",
+ "forum": "",
+ "authority_to_approach_court": "",
  "charges": [],
  "demands": [],
  "arguments": [],
+ "plan_of_action": {
+   "filing_recommendation": "",
+   "recommended_remedy": "",
+   "reasons": []
+ },
  "citations":[
  {
    "case_name":"",
@@ -223,9 +210,15 @@ IMPORTANT:
 Only cite real cases.
 Strongly prefer Supreme Court of India cases.
 Use High Court cases sparingly and only when they are uniquely relevant.
-Do not invent Indian Kanoon document ids.
-If you are unsure of the exact document URL, provide an Indian Kanoon search URL for the exact case name instead of a direct document link.
+Do not invent document ids or fallback search links.
+If you are unsure of the exact document URL, leave the link blank.
 Do not leave applicant, defendant, or charges blank. If the document is unclear, provide the best supported extraction or inference from the text.
+Do not leave forum or authority_to_approach_court blank. State the best supported legal basis from the document, such as the section invoked, the revisional/appellate/writ jurisdiction, or the procedural route used to approach the court.
+Frame the arguments from the applicant's side as strongly as the record and law reasonably permit.
+Interpret the statutory provisions, procedural safeguards, and cited precedents in a way that most strongly supports the applicant, while remaining legally defensible.
+Prefer arguments that show lack of ingredients of the offence, non-application of mind, procedural illegality, weak mens rea, weak nexus, overreach by the lower court, and any other ground that weakens the prosecution case where applicable.
+Think like experienced Supreme Court counsel: identify the strongest defensible legal route, give the applicant the benefit of every fairly arguable interpretation, and organise the case around the most persuasive legal propositions first.
+Do not leave plan_of_action blank. State clearly whether the next step should be a fresh petition or a revised petition, what precise remedy should be sought, and why that is the best course in this matter.
 """
 
         response = client.responses.create(

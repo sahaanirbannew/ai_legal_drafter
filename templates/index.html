@@ -18,6 +18,9 @@
             --info-soft: #e7f7ec;
             --warn: #9e2f2f;
             --warn-soft: #fdeaea;
+            --agent-bg: #fff3bf;
+            --agent-border: #e7c74a;
+            --agent-text: #7a5a00;
         }
 
         * { box-sizing: border-box; }
@@ -35,6 +38,7 @@
             min-height: 100vh;
             padding: 24px;
             gap: 22px;
+            position: relative;
         }
 
         .side-panel {
@@ -45,6 +49,31 @@
             display: flex;
             flex-direction: column;
             justify-content: space-between;
+            transition: width 0.25s ease, padding 0.25s ease, opacity 0.25s ease;
+        }
+
+        .side-panel.collapsed {
+            width: 0;
+            padding-left: 0;
+            padding-right: 0;
+            border-width: 0;
+            overflow: hidden;
+            opacity: 0;
+        }
+
+        .sidebar-toggle {
+            position: absolute;
+            left: 24px;
+            top: 24px;
+            z-index: 20;
+            width: 48px;
+            height: 48px;
+            border: 2px solid var(--line);
+            background: #234675;
+            color: #f6fbff;
+            font-size: 26px;
+            line-height: 1;
+            cursor: pointer;
         }
 
         .nav-group, .nav-footer {
@@ -159,9 +188,6 @@
 
         .log-time { color: var(--muted); margin-right: 8px; }
         .log-level { font-weight: 700; margin-right: 8px; }
-        .log-level.info { color: #3d4b67; }
-        .log-level.debug { color: #756a55; }
-        .log-level.error { color: var(--warn); }
 
         .screen-footer, .screen-nav { margin-top: 14px; }
         .screen-nav { display: flex; gap: 12px; }
@@ -293,6 +319,18 @@
             margin-bottom: 6px;
         }
 
+        .llm-response-box {
+            margin: 8px 0 0;
+            padding: 10px;
+            white-space: pre-wrap;
+            word-break: break-word;
+            background: #f4f8ff;
+            border: 1px solid var(--line);
+            color: var(--text);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
         .download-button {
             width: 100%;
             margin-top: 4px;
@@ -310,21 +348,9 @@
             display: inline-block;
             padding: 2px 8px;
             border-radius: 999px;
-        }
-
-        .log-level.info {
-            color: var(--info);
-            background: var(--info-soft);
-        }
-
-        .log-level.debug {
-            color: var(--accent-strong);
-            background: var(--accent-soft);
-        }
-
-        .log-level.error {
-            color: var(--warn);
-            background: var(--warn-soft);
+            color: var(--agent-text);
+            background: var(--agent-bg);
+            border: 1px solid var(--agent-border);
         }
 
         .finalize-status {
@@ -359,6 +385,13 @@
             line-height: 1.5;
         }
 
+        .app-footer {
+            margin-top: 24px;
+            color: var(--muted);
+            font-size: 14px;
+            text-align: center;
+        }
+
         @media (max-width: 1080px) {
             .review-layout {
                 grid-template-columns: 1fr;
@@ -384,6 +417,7 @@
 </head>
 <body>
     <div class="app-shell">
+        <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="Toggle sidebar">☰</button>
         <aside class="side-panel">
             <div class="nav-group">
                 <a class="panel-link" href="#">Analyse<br />Chargesheet</a>
@@ -410,7 +444,7 @@
                     <div id="status" class="status-summary">Waiting for file upload.</div>
                     <div id="spinner" class="hidden">Processing...</div>
                     <ol id="log" class="detail-log">
-                        <li><span class="log-time">System</span><span class="log-level info">Info</span>UI ready for upload.</li>
+                        <li><span class="log-time">System</span><span class="log-level">agent call</span>UI ready for upload.</li>
                     </ol>
                 </div>
                 <div class="screen-footer">
@@ -483,6 +517,7 @@ Existing argument provided: Pending analysis.</div>
                     </div>
                 </div>
             </section>
+            <div class="app-footer">Anirban vibe coded this.</div>
         </main>
     </div>
 

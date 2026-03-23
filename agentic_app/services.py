@@ -63,7 +63,7 @@ class RevisionService:
 
     def revise_draft(self, analysis: dict, draft_text: str, validation_text: str) -> str:
         prompt = f"""
-You are a senior Indian constitutional lawyer revising a draft legal argument.
+You are senior Supreme Court counsel in India revising a draft legal argument for the applicant.
 
 You will receive:
 1. Case analysis JSON
@@ -74,6 +74,17 @@ Your job:
 - Rewrite the draft so it addresses the validator's criticisms.
 - Remove or soften weak, unsupported, or hallucinated points.
 - Improve the structure and legal reasoning.
+- Use easy legalese. Avoid unnecessarily difficult, archaic, or ornamental wording.
+- Stay close to the style, tone, and vocabulary used in the input case document wherever possible.
+- Clearly state why this court/forum is being approached and under what legal authority, provision, or jurisdiction the filing is maintainable.
+- Include a separate section labelled exactly "Plan of Action:".
+- In that section, state whether the next step should be a new petition or a revised petition.
+- State the most appropriate remedy to be sought in this particular case.
+- Give reasons for that choice, preferably linking the recommendation to the cited authorities and procedural posture.
+- Interpret the law firmly in favour of the applicant wherever that interpretation is reasonably open on the record and authorities.
+- Present the strongest defensible reading of the statute, precedent, and procedural safeguards for the applicant's case.
+- Where two readings are possible, prefer the one that better supports discharge, quashing, interference, or other relief sought by the applicant, provided it is legally arguable.
+- Think and write like experienced Supreme Court counsel: lead with the strongest legal propositions, state the applicant-friendly interpretation confidently, and press every sustainable legal advantage available on the record.
 - Consider humanitarian grounds, mental health considerations, and the spirit of the law, but only if they are genuinely supportable from the case materials or reasonable legal inferences.
 - Do not force those themes if they are not applicable.
 - Preserve a professional court-ready tone.
@@ -113,7 +124,7 @@ class FinalizationService:
         comments: list[dict],
     ) -> str:
         prompt = f"""
-You are a senior Indian constitutional lawyer finalising a draft legal argument for filing.
+You are senior Supreme Court counsel in India finalising a draft legal argument for filing on behalf of the applicant.
 
 You will receive:
 1. Case analysis JSON
@@ -125,6 +136,17 @@ Your job:
 - Produce the final polished legal argument in plain text.
 - Respect the user's manual edits unless they create a clear legal, structural, or logical problem.
 - Incorporate reviewer comments where appropriate.
+- Use easy legalese. Avoid unnecessarily difficult or obscure wording.
+- Keep the language close to the wording and style used in the source case papers where that can be done cleanly.
+- Clearly justify why the matter is before this court and under what legal authority, section, or jurisdiction the court is being approached.
+- Include a separate section labelled exactly "Plan of Action:".
+- In that section, state whether this matter should proceed by a new petition or a revised petition.
+- State the most appropriate remedy to seek in this case.
+- Give reasons for that course, preferably supported by the cited authorities and the procedural posture on record.
+- Interpret the law strongly in favour of the applicant, so long as the interpretation remains grounded in the record and the cited authorities.
+- Present the strongest legally defensible construction of the facts, statutory provisions, and precedents for obtaining the relief sought.
+- Do not dilute the argument unnecessarily. If a strong legal point is fairly available, articulate it clearly and with confidence.
+- Think and write like experienced Supreme Court counsel: structure the submission around the best legal grounds first, use authority strategically, and press the most persuasive applicant-friendly interpretation that the materials can sustain.
 - Where appropriate, strengthen the argument using humanitarian grounds, mental health considerations, and the spirit of the law, but only if supportable from the materials.
 - Retain or improve citation references and keep them grounded in the provided analysis.
 - Do not output notes, markdown fences, explanations, or a changelog.

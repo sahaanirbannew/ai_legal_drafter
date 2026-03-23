@@ -8,6 +8,7 @@ let reviewerComments = []
 let selectedText = ""
 let activeCitationIndex = null
 let finalizeInProgress = false
+let sidebarCollapsed = false
 
 function setUploadButtonEnabled(enabled) {
     document.getElementById("uploadBtn").disabled = !enabled
@@ -22,6 +23,11 @@ function setDownloadEnabled(enabled) {
     document.getElementById("downloadBtn").disabled = !enabled || finalizeInProgress
 }
 
+function toggleSidebar() {
+    sidebarCollapsed = !sidebarCollapsed
+    document.querySelector(".side-panel").classList.toggle("collapsed", sidebarCollapsed)
+}
+
 function showSpinner(active) {
     let spinner = document.getElementById("spinner")
     if (!spinner) return
@@ -33,16 +39,20 @@ function updateStatus(message) {
     if (status) status.innerText = message
 }
 
-function appendLog(message, level = "Info") {
+function appendLog(message) {
     let log = document.getElementById("log")
     if (!log) return
 
     let item = document.createElement("li")
     let ts = new Date().toLocaleString()
-    let levelClass = level.toLowerCase()
-    item.innerHTML = `<span class="log-time">${ts}</span><span class="log-level ${levelClass}">${level}</span>${escapeHtml(message)}`
+    item.innerHTML = `<span class="log-time">${ts}</span><span class="log-level">agent call</span>${escapeHtml(message)}`
     log.appendChild(item)
     log.scrollTop = log.scrollHeight
+}
+
+function setAgentCalls(calls) {
+    if (!calls || calls.length === 0) return
+    calls.forEach((call) => appendLog(call))
 }
 
 function appendDownloadLog(message) {
@@ -129,7 +139,7 @@ function resetPipelineState() {
     document.getElementById("caseSummary").innerText = "Applicant: Not yet extracted.\nDefendant: Not yet extracted.\nCharges: Not yet extracted.\nDemands: Not yet extracted.\n\nExisting argument provided: Pending analysis."
     document.getElementById("downloadLog").innerHTML = "<li>No download activity yet.</li>"
     setDownloadProgress(0, "Waiting to finalise.")
-    appendLog("Pipeline state reset for a fresh upload.", "Debug")
+    appendLog("Pipeline state reset for a fresh upload.")
 }
 
 function cancelPipeline() {
@@ -137,20 +147,20 @@ function cancelPipeline() {
     setUploadButtonEnabled(true)
     showSpinner(false)
     updateStatus("Pipeline cancelled.")
-    appendLog("Pipeline cancellation requested by user.", "Info")
+    appendLog("Pipeline cancellation requested by user.")
 }
 
 function showArgumentScreen() {
     if (!analysisReady) return
     document.getElementById("uploadScreen").classList.add("hidden")
     document.getElementById("argumentScreen").classList.remove("hidden")
-    appendLog("Review workspace opened.", "Debug")
+    appendLog("Review workspace opened.")
 }
 
 function showUploadScreen() {
     document.getElementById("argumentScreen").classList.add("hidden")
     document.getElementById("uploadScreen").classList.remove("hidden")
-    appendLog("Returned to upload screen.", "Debug")
+    appendLog("Returned to upload screen.")
 }
 
 function applyEditorCommand(command, value = null) {
@@ -195,7 +205,7 @@ function addComment() {
         comment: note,
         created_at: new Date().toISOString(),
     })
-    appendLog(`Comment added for selected text: ${selectedText.slice(0, 80)}.`, "Info")
+    appendLog(`Comment added for selected text: ${selectedText.slice(0, 80)}.`)
     input.value = ""
     selectedText = ""
     document.getElementById("selectedExcerpt").innerText = "No text selected."
@@ -281,9 +291,10 @@ function showCitationDetails(index) {
         `<div style="margin-top:8px;"><em>Why cited:</em> ${escapeHtml(citation.why_cited || "No reason provided")}</div>` +
         `<div style="margin-top:8px;"><em>Relevance:</em> ${escapeHtml(String(citation.relevance_score ?? "N/A"))}</div>` +
         `<div><em>Strength:</em> ${escapeHtml(String(citation.strength_score ?? "N/A"))}</div>` +
-        `<div><em>Link validation:</em> ${citation.link_verified ? "Verified direct link" : "Search-safe link"}</div>` +
+        `<div><em>Link validation:</em> ${citation.link_verified ? "Validated LLM link" : "No validated link"}</div>` +
         `<div style="margin-top:8px;"><em>Link note:</em> ${escapeHtml(citation.link_note || "No additional note.")}</div>` +
-        `<div style="margin-top:8px;"><em>Link:</em> ${citation.link ? `<a href="${escapeHtml(citation.link)}" target="_blank" rel="noreferrer">${escapeHtml(citation.link)}</a>` : "No link provided"}</div>`
+        `<div style="margin-top:8px;"><em>LLM returned citation link:</em> ${citation.link ? `<a href="${escapeHtml(citation.link)}" target="_blank" rel="noreferrer">${escapeHtml(citation.link)}</a>` : "No link provided"}</div>` +
+        `<div style="margin-top:8px;"><em>LLM raw response:</em><pre class="llm-response-box">${escapeHtml(citation.llm_link_response || "No LLM response captured.")}</pre></div>`
     document.getElementById("citationDetails").innerHTML = html
 }
 
@@ -302,14 +313,15 @@ async function upload() {
     resetPipelineState()
     showSpinner(true)
     updateStatus("Upload started.")
-    appendLog("Upload began. Preparing selected PDF for ingestion.", "Info")
+    setAgentCalls(["IntakeAgent: saving uploaded PDF", "OpenAIFileService: creating OpenAI file"])
+    appendLog("Upload began. Preparing selected PDF for ingestion.")
     setUploadButtonEnabled(false)
 
     try {
         let file = document.getElementById("file").files[0]
         if (!file) throw new Error("No file selected")
 
-        appendLog(`Selected file: ${file.name} (${Math.round(file.size / 1024)} KB).`, "Debug")
+        appendLog(`Selected file: ${file.name} (${Math.round(file.size / 1024)} KB).`)
         let form = new FormData()
         form.append("file", file)
 
@@ -320,35 +332,38 @@ async function upload() {
         }
 
         currentCaseId = result.case_id
-        appendLog(`Upload completed. Assigned case id ${currentCaseId}.`, "Info")
+        appendLog(`Upload completed. Assigned case id ${currentCaseId}.`)
         updateStatus("Upload completed. Analysis is starting.")
+        setAgentCalls(["CaseAnalysisAgent: extracting structured case data", "DraftingAgent: building initial argument"])
 
         let genResult = await generate()
         if (!genResult.success || pipelineCancelled) {
-            appendLog("Upload flow stopped before analysis could complete.", "Error")
+            appendLog("Upload flow stopped before analysis could complete.")
             return { success: false }
         }
 
-        appendLog("Case processed successfully. Strategise is now available.", "Info")
+        appendLog("Case processed successfully. Strategise is now available.")
         updateStatus("File uploaded and processed. Open Strategise to review the argument.")
         setStrategiseEnabled(true)
         setDownloadEnabled(true)
         showArgumentScreen()
+        setAgentCalls(["ValidationAgent: sending draft to Gemini", "RevisionAgent: waiting for validation result"])
 
         let valResult = await validate()
         if (!valResult.success || pipelineCancelled) {
-            appendLog("Validation did not complete after analysis.", "Error")
+            appendLog("Validation did not complete after analysis.")
             return { success: false }
         }
 
         validationReady = true
         setDownloadEnabled(true)
-        appendLog("Validation completed. Review the argument, add comments, then finalize and download.", "Info")
+        setAgentCalls(["Review workspace: user edits/comments", "OutputAgent: final PDF generation available"])
+        appendLog("Validation completed. Review the argument, add comments, then finalize and download.")
         updateStatus("Validation complete. Review, edit, comment, and download the final version.")
         return { success: true }
     } catch (err) {
         updateStatus("Upload failed.")
-        appendLog(`Upload flow failed: ${err.message}`, "Error")
+        appendLog(`Upload flow failed: ${err.message}`)
         alert("Upload failed: " + err.message)
         return { success: false }
     } finally {
@@ -359,7 +374,8 @@ async function upload() {
 
 async function generate() {
     updateStatus("Analysis in progress.")
-    appendLog("Analysis agent started. Extracting demands, arguments, and citations.", "Info")
+    setAgentCalls(["CaseAnalysisAgent: extracting applicant, defendant, charges, demands", "Citation resolver: refining citation links", "DraftingAgent: building draft"])
+    appendLog("Analysis agent started. Extracting demands, arguments, and citations.")
 
     try {
         if (!currentCaseId) throw new Error("No active case. Upload a PDF first.")
@@ -374,8 +390,8 @@ async function generate() {
             throw new Error(data.message || "Analysis failed")
         }
 
-        appendLog("Analysis completed successfully. Draft argument received from backend.", "Info")
-        appendLog(`Citation count returned: ${data.citations.length}.`, "Debug")
+        appendLog("Analysis completed successfully. Draft argument received from backend.")
+        appendLog(`Citation count returned: ${data.citations.length}.`)
         citations = data.citations || []
 
         let caseState = await fetchCaseState()
@@ -401,7 +417,7 @@ async function generate() {
         return { success: true }
     } catch (err) {
         updateStatus("Analysis failed.")
-        appendLog(`Analysis failed: ${err.message}`, "Error")
+        appendLog(`Analysis failed: ${err.message}`)
         alert("Generation failed: " + err.message)
         return { success: false }
     }
@@ -409,7 +425,8 @@ async function generate() {
 
 async function validate() {
     updateStatus("Validation in progress.")
-    appendLog("Validation agent started. Polling backend for detailed review.", "Info")
+    setAgentCalls(["ValidationAgent: Gemini review in progress", "RevisionAgent: revision pending validation output"])
+    appendLog("Validation agent started. Polling backend for detailed review.")
 
     try {
         if (!currentCaseId) throw new Error("No active case. Upload a PDF first.")
@@ -425,7 +442,7 @@ async function validate() {
         }
 
         let taskId = startData.task_id
-        appendLog(`Validation task created: ${taskId}.`, "Debug")
+        appendLog(`Validation task created: ${taskId}.`)
 
         return new Promise((resolve) => {
             let pollInterval = setInterval(async () => {
@@ -436,13 +453,13 @@ async function validate() {
                     if (pipelineCancelled) {
                         clearInterval(pollInterval)
                         updateStatus("Validation cancelled.")
-                        appendLog("Validation polling stopped because the pipeline was cancelled.", "Info")
+                        appendLog("Validation polling stopped because the pipeline was cancelled.")
                         resolve({ success: false })
                         return
                     }
 
                     if (statusData.status === "pending") {
-                        appendLog("Validation still running. Awaiting Gemini review output.", "Debug")
+                        appendLog("Validation still running. Awaiting Gemini review output.")
                         return
                     }
 
@@ -460,13 +477,14 @@ async function validate() {
                         `Suggested improvements:\n${(validationData.suggested_improvements || []).map(item => `- ${item}`).join("\n") || "- None reported"}`
 
                     document.getElementById("validationSummary").innerText = summary
-                    appendLog("Validation completed and the summary panel was updated.", "Info")
-                    appendLog(`Validation scores: overall ${validationData.overall_validity_score ?? "N/A"}, logic ${validationData.logic_score ?? "N/A"}, citations ${validationData.citation_validity_score ?? "N/A"}.`, "Debug")
+                    setAgentCalls(["RevisionAgent: revised draft ready", "Review workspace: user can finalise and download"])
+                    appendLog("Validation completed and the summary panel was updated.")
+                    appendLog(`Validation scores: overall ${validationData.overall_validity_score ?? "N/A"}, logic ${validationData.logic_score ?? "N/A"}, citations ${validationData.citation_validity_score ?? "N/A"}.`)
                     resolve({ success: true })
                 } catch (pollErr) {
                     clearInterval(pollInterval)
                     updateStatus("Validation failed.")
-                    appendLog(`Validation polling failed: ${pollErr.message}`, "Error")
+                    appendLog(`Validation polling failed: ${pollErr.message}`)
                     alert("Validation failed: " + pollErr.message)
                     resolve({ success: false })
                 }
@@ -474,7 +492,7 @@ async function validate() {
         })
     } catch (err) {
         updateStatus("Validation failed.")
-        appendLog(`Validation start failed: ${err.message}`, "Error")
+        appendLog(`Validation start failed: ${err.message}`)
         alert("Validation failed: " + err.message)
         return { success: false }
     }
@@ -482,7 +500,8 @@ async function validate() {
 
 async function finalizeAndDownload() {
     updateStatus("Finalizing argument and generating PDF.")
-    appendLog("Finalization requested. Sending edited draft and reviewer comments to backend.", "Info")
+    setAgentCalls(["FinalizationService: incorporating edits/comments", "OutputAgent: generating final PDF"])
+    appendLog("Finalization requested. Sending edited draft and reviewer comments to backend.")
     finalizeInProgress = true
     setDownloadEnabled(false)
     setDownloadProgress(8, "Preparing edited draft for finalisation.")
@@ -534,14 +553,14 @@ async function finalizeAndDownload() {
         setDownloadProgress(100, "Finalised argument downloaded successfully.")
         appendDownloadLog("Download finished and the file was handed to the browser.")
 
-        appendLog(`Finalized argument downloaded successfully: ${filename}.`, "Info")
+        appendLog(`Finalized argument downloaded successfully: ${filename}.`)
         updateStatus(`Finalized PDF generated: ${filename}.`)
         return { success: true }
     } catch (err) {
         setDownloadProgress(100, "Finalisation failed.")
         appendDownloadLog(`Finalisation failed: ${err.message}`)
         updateStatus("Finalization failed.")
-        appendLog(`Finalization failed: ${err.message}`, "Error")
+        appendLog(`Finalization failed: ${err.message}`)
         alert("Finalization failed: " + err.message)
         return { success: false }
     } finally {
