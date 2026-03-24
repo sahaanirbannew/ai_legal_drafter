@@ -58,6 +58,20 @@ def _read_pdf_part(path: str) -> dict[str, Any]:
         return {"mime_type": "application/pdf", "data": file_obj.read()}
 
 
+def _is_valid_indiankanoon_doc_link(link: str) -> bool:
+    return bool(re.match(r"^https://indiankanoon\.org/doc/\d+/?$", link))
+
+
+def _is_valid_indian_court_pdf_link(link: str, is_supreme: bool, is_high: bool) -> bool:
+    if not link or not link.lower().endswith(".pdf"):
+        return False
+    if is_supreme:
+        return bool(re.match(r"^https://main\.sci\.gov\.in/.+\.pdf$", link))
+    if is_high:
+        return link.startswith("https://")
+    return False
+
+
 def _resolve_link_from_description(citation: dict) -> tuple[Optional[str], bool, str, str, str]:
     case_name = str(citation.get("case_name", "")).strip()
     court = str(citation.get("court", "")).strip()
@@ -67,37 +81,62 @@ def _resolve_link_from_description(citation: dict) -> tuple[Optional[str], bool,
 Court: {court}
 Description: {description}"""
     prompt = f"""
-Give me the PDF link from Supreme Court or High Court of India for the case given at the end of the instructions.
+Give me the PDF link from Supreme Court or High Court of India OR
+Give me the doc link IndianKanoon
+for the case given at the end of the instructions.
 
 Mandatory response format:
 {{
-"link": < all link here >,
-"validated": {{
-  "is_SupremeCourt": <True if the source is Supreme Court of India website>,
-  "is_HighCourt": <True if the source is High Court of India website>,
-  "is_PDF": <True if the link is PDF file>,
-  "is_Correct": <True if the file content matches description>
-}}
+    "IndianKanoon": {{
+        "link": < the /doc/ link to the main case>
+    }},
+    "IndianCourt": {{
+        "is_SupremeCourt": <True if the source is Supreme Court of India website>,
+        "is_HighCourt": <True if the source is High Court of India website>,
+        "is_PDF": <True if the link is PDF file>,
+        "link": < the link to the document>
+    }},
+    "is_Correct": <True if the file content matches description>,
+    "reason": <mention how you know if is_Correct = True. Did you scrape it?>,
+    "is_accessible": <True if the website/file opens>
 }}
 
+Note:
+Link of IndianKanoon should be of the structure: "https://indiankanoon.org/doc/<unique_id>/"
+ONLY take the link if it follows the format.
+
+Link to Supreme Court PDF should be of the structure: "https://main.sci.gov.in/<folder/page/..>.pdf"
+ONLY take the link if it follows the format.
+
+==================
 Case:
 {description_payload}
 """
 
     try:
         parsed, raw_response = generate_json(prompt)
-        link = str(parsed.get("link", "") or "").strip()
-        validation = parsed.get("validated", {}) or {}
-        is_supreme = bool(validation.get("is_SupremeCourt", False))
-        is_high = bool(validation.get("is_HighCourt", False))
-        is_pdf = bool(validation.get("is_PDF", False))
-        is_correct = bool(validation.get("is_Correct", False))
-        validated = bool(link) and is_pdf and is_correct and (is_supreme or is_high)
-        if not link:
-            return None, False, "No document link was returned by Gemini.", raw_response, prompt
-        if validated:
-            return link, True, "Link resolved from citation description via Gemini.", raw_response, prompt
-        return link, False, "Gemini returned a link, but the validation flags did not fully confirm it.", raw_response, prompt
+        indian_kanoon = parsed.get("IndianKanoon", {}) or {}
+        indian_court = parsed.get("IndianCourt", {}) or {}
+        ik_link = str(indian_kanoon.get("link", "") or "").strip()
+        court_link = str(indian_court.get("link", "") or "").strip()
+        is_supreme = bool(indian_court.get("is_SupremeCourt", False))
+        is_high = bool(indian_court.get("is_HighCourt", False))
+        is_pdf = bool(indian_court.get("is_PDF", False))
+        is_correct = bool(parsed.get("is_Correct", False))
+        is_accessible = bool(parsed.get("is_accessible", False))
+        reason = str(parsed.get("reason", "") or "").strip()
+
+        court_valid = is_accessible and is_correct and is_pdf and (is_supreme or is_high) and _is_valid_indian_court_pdf_link(court_link, is_supreme, is_high)
+        ik_valid = is_accessible and is_correct and _is_valid_indiankanoon_doc_link(ik_link)
+
+        if court_valid:
+            return court_link, True, f"Gemini selected an Indian court PDF link. {reason}".strip(), raw_response, prompt
+        if ik_valid:
+            return ik_link, True, f"Gemini selected an Indian Kanoon doc link. {reason}".strip(), raw_response, prompt
+        if court_link or ik_link:
+            fallback_link = court_link or ik_link
+            return fallback_link, False, "Gemini returned candidate links, but they did not satisfy the validation rules.", raw_response, prompt
+        return None, False, "No document link was returned by Gemini.", raw_response, prompt
     except Exception as exc:
         logger.warning("Description-based link resolution failed for %s: %s", case_name, exc)
         return None, False, "Description-based link resolution failed.", str(exc), prompt
@@ -141,7 +180,17 @@ def _sort_and_normalize_citations(citations: list[dict[str, Any]]) -> list[dict[
         citation["llm_link_prompt"] = llm_prompt
         citation["llm_link_response"] = llm_raw_response
         try:
-            citation["llm_link_validation"] = _extract_json_payload(llm_raw_response).get("validated", {})
+            parsed_link_response = _extract_json_payload(llm_raw_response)
+            citation["llm_link_validation"] = {
+                "is_SupremeCourt": bool((parsed_link_response.get("IndianCourt", {}) or {}).get("is_SupremeCourt", False)),
+                "is_HighCourt": bool((parsed_link_response.get("IndianCourt", {}) or {}).get("is_HighCourt", False)),
+                "is_PDF": bool((parsed_link_response.get("IndianCourt", {}) or {}).get("is_PDF", False)),
+                "is_Correct": bool(parsed_link_response.get("is_Correct", False)),
+                "is_accessible": bool(parsed_link_response.get("is_accessible", False)),
+                "reason": str(parsed_link_response.get("reason", "") or "").strip(),
+                "indian_kanoon_link": str(((parsed_link_response.get("IndianKanoon", {}) or {}).get("link", "") or "")).strip(),
+                "indian_court_link": str(((parsed_link_response.get("IndianCourt", {}) or {}).get("link", "") or "")).strip(),
+            }
         except Exception:
             citation["llm_link_validation"] = {}
 

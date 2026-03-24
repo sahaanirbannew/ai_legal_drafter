@@ -268,6 +268,11 @@ function renderArgumentDifferences(points) {
     container.innerText = items.map(item => `- ${item}`).join("\n")
 }
 
+function buildCitationLinkButton(label, url) {
+    if (!url) return ""
+    return `<a class="citation-link-button" href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`
+}
+
 function renderCaseSummary(analysis, draftText) {
     let demands = (analysis.demands || []).length ? analysis.demands.join("; ") : "Not extracted."
     let charges = Array.isArray(analysis.charges) && analysis.charges.length
@@ -320,7 +325,19 @@ function showCitationDetails(index) {
     let citation = citations[index]
     if (!citation) return
     let validation = citation.llm_link_validation || {}
-    let validationText = `SC: ${validation.is_SupremeCourt ? "true" : "false"}, HC: ${validation.is_HighCourt ? "true" : "false"}, PDF: ${validation.is_PDF ? "true" : "false"}, Correct: ${validation.is_Correct ? "true" : "false"}`
+    let validationText = `SC: ${validation.is_SupremeCourt ? "true" : "false"}, HC: ${validation.is_HighCourt ? "true" : "false"}, PDF: ${validation.is_PDF ? "true" : "false"}, Correct: ${validation.is_Correct ? "true" : "false"}, Accessible: ${validation.is_accessible ? "true" : "false"}`
+    let validLinks = []
+    if (validation.is_Correct && validation.is_accessible) {
+        if (validation.indian_court_link) {
+            validLinks.push(buildCitationLinkButton("Open IndianCourt Link", validation.indian_court_link))
+        }
+        if (validation.indian_kanoon_link) {
+            validLinks.push(buildCitationLinkButton("Open IndianKanoon Link", validation.indian_kanoon_link))
+        }
+        if (citation.link && !validLinks.length) {
+            validLinks.push(buildCitationLinkButton("Open Selected Citation Link", citation.link))
+        }
+    }
 
     let html =
         `<strong>${escapeHtml(citation.case_name)}</strong>` +
@@ -331,6 +348,10 @@ function showCitationDetails(index) {
         `<div><em>Strength:</em> ${escapeHtml(String(citation.strength_score ?? "N/A"))}</div>` +
         `<div><em>Link validation:</em> ${citation.link_verified ? "Validated LLM link" : "No validated link"}</div>` +
         `<div style="margin-top:8px;"><em>LLM validation flags:</em> ${escapeHtml(validationText)}</div>` +
+        `<div style="margin-top:8px;"><em>Validated link buttons:</em> ${validLinks.length ? validLinks.join(" ") : "No validated accessible links"}</div>` +
+        `<div style="margin-top:8px;"><em>IndianCourt candidate:</em> ${validation.indian_court_link ? `<a href="${escapeHtml(validation.indian_court_link)}" target="_blank" rel="noreferrer">${escapeHtml(validation.indian_court_link)}</a>` : "No link provided"}</div>` +
+        `<div style="margin-top:8px;"><em>IndianKanoon candidate:</em> ${validation.indian_kanoon_link ? `<a href="${escapeHtml(validation.indian_kanoon_link)}" target="_blank" rel="noreferrer">${escapeHtml(validation.indian_kanoon_link)}</a>` : "No link provided"}</div>` +
+        `<div style="margin-top:8px;"><em>LLM reason:</em> ${escapeHtml(validation.reason || "No reason provided.")}</div>` +
         `<div style="margin-top:8px;"><em>Link note:</em> ${escapeHtml(citation.link_note || "No additional note.")}</div>` +
         `<div style="margin-top:8px;"><em>LLM input prompt:</em><pre class="llm-response-box">${escapeHtml(citation.llm_link_prompt || "No LLM prompt captured.")}</pre></div>` +
         `<div style="margin-top:8px;"><em>LLM returned citation link:</em> ${citation.link ? `<a href="${escapeHtml(citation.link)}" target="_blank" rel="noreferrer">${escapeHtml(citation.link)}</a>` : "No link provided"}</div>` +
