@@ -13,6 +13,9 @@ class DraftingAgent(BaseAgent):
         if not case_state.analysis:
             raise ValueError("Case analysis not available")
         case_state.draft_text = self.drafting_service.build_draft(case_state.analysis)
+        case_state.argument_difference_points = self.drafting_service.build_argument_differences(
+            case_state.analysis,
+            case_state.draft_text,
+        )
         case_state.status = "drafted"
         return case_state
-

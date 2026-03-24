@@ -13,7 +13,7 @@ if not gemini_api_key:
 
 genai.configure(api_key=gemini_api_key)
 
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel(os.getenv("GEMINI_MODEL", "gemini-2.5-flash"))
 
 
 def validate_case(original_file_path, generated_pdf_path, json_output):
@@ -53,6 +53,8 @@ Return JSON format:
 Here is the generated case JSON:
 
 {json.dumps(json_output)}
+
+Return only JSON. Do not wrap the response in markdown fences.
 """
 
         with open(original_file_path, "rb") as f:
@@ -66,7 +68,8 @@ Here is the generated case JSON:
                 prompt,
                 {"mime_type": "application/pdf", "data": original_pdf},
                 {"mime_type": "application/pdf", "data": argument_pdf},
-            ]
+            ],
+            generation_config={"response_mime_type": "application/json"},
         )
 
         logger.info('validate_case completed successfully')

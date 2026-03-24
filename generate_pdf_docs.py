@@ -95,7 +95,7 @@ def create_pdf_documentation():
     elements.append(Paragraph("Executive Summary", heading1_style))
     elements.append(Paragraph(
         "The AI Legal Arguments Generator is a web-based application that leverages artificial intelligence "
-        "(OpenAI GPT-5 and Google Gemini 1.5) to analyze legal case documents, generate sophisticated legal arguments, "
+        "(Google Gemini 2.5 Flash) to analyze legal case documents, generate sophisticated legal arguments, "
         "identify relevant citations, and validate the quality of legal reasoning for Indian constitutional law cases.",
         body_style
     ))
@@ -141,7 +141,7 @@ def create_pdf_documentation():
     elements.append(Paragraph("Key Features", heading2_style))
     features = [
         "✓ PDF Case Upload with real-time status",
-        "✓ AI-Powered Analysis using OpenAI GPT-5",
+        "✓ AI-Powered Analysis using Gemini 2.5 Flash",
         "✓ Legal Citation Discovery and Validation",
         "✓ Gemini-based Quality Validation",
         "✓ Dynamic PDF Generation with Timestamps",
@@ -169,14 +169,13 @@ def create_pdf_documentation():
     
     <b>API Tier:</b> FastAPI backend handling:
     • HTTP routing and endpoint management
-    • OpenAI integration
     • Gemini integration
     • File management
     • PDF generation
-    
+
     <b>Integration Tier:</b> External AI services:
-    • OpenAI GPT-5 for case analysis
-    • Google Gemini 1.5 Pro for validation
+    • Google Gemini 2.5 Flash for case analysis, revision, and finalization
+    • Google Gemini 2.5 Flash for validation
     • Local PDF storage
     """
     
@@ -193,7 +192,7 @@ def create_pdf_documentation():
         ['Layer', 'Technology', 'Purpose'],
         ['Frontend', 'HTML5, CSS, JavaScript', 'User interface'],
         ['Backend', 'FastAPI, Uvicorn', 'REST API server'],
-        ['AI Services', 'OpenAI GPT-5, Gemini 1.5', 'Legal analysis'],
+        ['AI Services', 'Gemini 2.5 Flash', 'Legal analysis, revision, validation'],
         ['PDF Generation', 'ReportLab', 'PDF creation'],
         ['File Handling', 'Python multipart', 'Upload processing'],
         ['Environment', 'python-dotenv', 'Configuration management'],
@@ -224,7 +223,7 @@ def create_pdf_documentation():
     
     endpoints = [
         ("GET /", "Serve Homepage", "Returns HTML interface"),
-        ("POST /upload", "Upload Case PDF", "Register case with OpenAI"),
+        ("POST /upload", "Upload Case PDF", "Store case locally for Gemini analysis"),
         ("POST /analyze", "Analyze Case", "Generate arguments and citations"),
         ("POST /validate", "Validate Arguments", "Quality check with Gemini"),
         ("POST /generate_pdf", "Export to PDF", "Create timestamped download")
@@ -244,10 +243,10 @@ def create_pdf_documentation():
     
     flow_text = """
     <b>Step 1: Upload</b>
-    User → /upload endpoint → Save to uploads/ → Create OpenAI file → Store file_id
-    
+    User → /upload endpoint → Save to uploads/ → Create case record
+
     <b>Step 2: Analyze</b>
-    /analyze endpoint → OpenAI API (file_id) → Parse JSON response → Store case_json_store
+    /analyze endpoint → Gemini API (PDF) → Parse JSON response → Store case_json_store
     → build_argument() → generated_text → Return to frontend
     
     <b>Step 3: Validate</b>
@@ -268,8 +267,8 @@ def create_pdf_documentation():
     elements.append(Paragraph("6. Component Descriptions", heading1_style))
     
     components = {
-        "main.py": "FastAPI backend managing HTTP routing, OpenAI integration, and state management",
-        "openai_client.py": "OpenAI API integration handling case analysis and citation extraction",
+        "main.py": "FastAPI backend managing HTTP routing, Gemini integration, and state management",
+        "gemini_client.py": "Gemini integration handling case analysis and citation extraction",
         "gemini_validator.py": "Google Gemini integration for validation and hallucination detection",
         "prompt.py": "Converts JSON analysis results to human-readable legal documents",
         "pdf_generator.py": "ReportLab integration for creating branded PDF documents",
@@ -303,7 +302,6 @@ def create_pdf_documentation():
     elements.append(Spacer(1, 0.15*inch))
     
     elements.append(Paragraph("Environment Variables (.env)", heading2_style))
-    elements.append(Paragraph("OPENAI_API_KEY=sk-...", body_style))
     elements.append(Paragraph("GEMINI_API_KEY=AIzaSy...", body_style))
     elements.append(Spacer(1, 0.2*inch))
     
@@ -331,7 +329,7 @@ def create_pdf_documentation():
     file_structure = """
     ai_legal_arguments/
     ├── main.py                    (FastAPI backend)
-    ├── openai_client.py          (OpenAI integration)
+    ├── gemini_client.py         (Gemini integration)
     ├── gemini_validator.py       (Gemini validation)
     ├── prompt.py                 (Argument formatting)
     ├── pdf_generator.py          (PDF creation)
@@ -357,14 +355,13 @@ def create_pdf_documentation():
     deps = [
         "fastapi - Web framework for building APIs",
         "uvicorn - ASGI server for running FastAPI",
-        "openai - Official OpenAI Python client",
         "google-generativeai - Google Gemini API client",
         "python-multipart - Form data handling",
         "reportlab - PDF generation library",
         "python-dotenv - Environment variable management",
         "jinja2 - Template engine",
         "faiss-cpu - Vector search (future)",
-        "tiktoken - Token counting for GPT models"
+        "tiktoken - Token counting and future analysis helpers"
     ]
     
     for dep in deps:

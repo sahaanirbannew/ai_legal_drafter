@@ -2,7 +2,7 @@
 
 ## Overview
 
-AI Legal Drafter is a FastAPI application for analysing Indian case documents, generating legal arguments, validating them with Gemini, revising them through an agentic workflow, and exporting final PDFs.
+AI Legal Drafter is a FastAPI application for analysing Indian case documents with Gemini, generating legal arguments, validating them with Gemini, revising them through an agentic workflow, and exporting final PDFs.
 
 The current system is built around a persisted `CaseState` and an orchestrated set of agents rather than one monolithic request pipeline.
 
@@ -31,9 +31,9 @@ flowchart LR
     ORCH --> REVISE["RevisionAgent"]
     ORCH --> OUTPUT["OutputAgent"]
 
-    INTAKE --> OPENAI_FILES["OpenAI Files API"]
-    ANALYSIS --> OPENAI_RESP["OpenAI Responses API"]
+    ANALYSIS --> GEMINI_ANALYSIS["Gemini 2.5 Flash"]
     VALIDATE --> GEMINI["Gemini 2.5 Flash"]
+    REVISE --> GEMINI_REWRITE["Gemini 2.5 Flash"]
     OUTPUT --> PDF["ReportLab PDF generation"]
 ```
 
@@ -42,8 +42,8 @@ flowchart LR
 ```mermaid
 flowchart TD
     A["Upload PDF"] --> B["Create CaseState"]
-    B --> C["IntakeAgent<br/>save file + upload to OpenAI"]
-    C --> D["CaseAnalysisAgent<br/>extract structured case data"]
+    B --> C["IntakeAgent<br/>save file locally"]
+    C --> D["CaseAnalysisAgent<br/>extract structured case data with Gemini"]
     D --> E["DraftingAgent<br/>build initial argument"]
     E --> F["ValidationAgent<br/>Gemini review"]
     F --> G["RevisionAgent<br/>revise from validation"]
@@ -62,7 +62,6 @@ Key fields:
 - `case_id`
 - `uploaded_pdf_path`
 - `original_filename`
-- `openai_file_id`
 - `analysis`
 - `draft_text`
 - `validation_text`
@@ -96,7 +95,7 @@ ai_legal_drafter/
 ├── templates/
 │   └── index.html
 ├── main.py
-├── openai_client.py
+├── gemini_client.py
 ├── gemini_validator.py
 ├── prompt.py
 ├── pdf_generator.py
@@ -110,7 +109,6 @@ ai_legal_drafter/
 - Frontend sends `POST /upload`
 - Backend creates a new `CaseState`
 - Intake agent saves the uploaded file
-- Intake agent uploads the file to OpenAI Files API
 - `case_id` is returned to the frontend
 
 ### 2. Analyse
@@ -242,7 +240,7 @@ The current citation pipeline is LLM-driven.
 
 ### Generation
 
-The first OpenAI pass generates candidate citations with:
+The first Gemini pass generates candidate citations with:
 
 - case name
 - court
@@ -253,7 +251,7 @@ The first OpenAI pass generates candidate citations with:
 
 ### Refinement
 
-A second OpenAI pass filters and reorders citations to:
+A second Gemini pass filters and reorders citations to:
 
 - prefer Supreme Court authorities
 - reduce weak or irrelevant citations
@@ -270,24 +268,39 @@ For each citation, the app sends a second prompt to the LLM using:
 Prompt shape:
 
 ```text
-Give me the document link (preferably link to a pdf file) for the below description:
+Give me the PDF link from Supreme Court or High Court of India for the case given at the end of the instructions.
+
+Mandatory response format:
+{
+  "link": <all link here>,
+  "validated": {
+    "is_SupremeCourt": <True if the source is Supreme Court of India website>,
+    "is_HighCourt": <True if the source is High Court of India website>,
+    "is_PDF": <True if the link is PDF file>,
+    "is_Correct": <True if the file content matches description>
+  }
+}
+
+Case:
 <case name>
 Court: <court>
 Description: <description>
-
-Return in json format { "link": < all link here >, "validated": < True if you are sure that is the file > }
 ```
 
 The resolver then:
 
 - parses the JSON response
-- accepts the link only when `validated` is `true`
-- leaves the citation link blank when the response is uncertain or malformed
-- stores the raw LLM response on the citation object for UI display
+- reads the nested `validated` object
+- accepts the link only when:
+  - `is_PDF` is `true`
+  - `is_Correct` is `true`
+  - and either `is_SupremeCourt` or `is_HighCourt` is `true`
+- preserves the raw LLM response on the citation object
+- exposes both the raw response and parsed validation flags in the UI
 
 ### Limitation
 
-This is intentionally not a deterministic court-database resolver. It depends on the LLM returning a usable and trusted document link. When the model is uncertain, the UI will now show no validated citation link rather than a fallback search URL.
+This is intentionally not a deterministic court-database resolver. It depends on Gemini returning a usable and trusted document link and honest validation flags. If those flags do not fully confirm the result, the app will not mark the citation link as validated.
 
 ## Frontend Review Workspace
 
@@ -297,6 +310,7 @@ This is intentionally not a deterministic court-database resolver. It depends on
 - inline citation references
 - right-hand citation details panel
 - raw LLM citation-link response display
+- parsed citation-link validation flags display
 - selection-based reviewer comments
 - validation summary
 - finalisation progress bar and logs
@@ -312,11 +326,8 @@ sequenceDiagram
 
     U->>FE: Upload PDF
     FE->>BE: POST /upload
-    BE->>AI: OpenAI file upload
-    BE-->>FE: case_id
-
     FE->>BE: POST /analyze
-    BE->>AI: OpenAI analysis
+    BE->>AI: Gemini analysis
     BE-->>FE: draft + citations
 
     FE->>BE: POST /validate/start
@@ -326,7 +337,7 @@ sequenceDiagram
 
     U->>FE: Edit + add comments
     FE->>BE: POST /finalize_pdf
-    BE->>AI: OpenAI finalization
+    BE->>AI: Gemini finalization
     BE-->>FE: final PDF
 ```
 
@@ -334,8 +345,8 @@ sequenceDiagram
 
 Environment variables expected in `.env`:
 
-- `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
+- `GEMINI_MODEL` defaulting to `gemini-2.5-flash`
 
 ## Dependencies
 
@@ -343,7 +354,6 @@ Core dependencies from `requirements.txt`:
 
 - `fastapi`
 - `uvicorn`
-- `openai`
 - `python-multipart`
 - `jinja2`
 - `reportlab`
@@ -357,6 +367,7 @@ Core dependencies from `requirements.txt`:
 - The current Gemini SDK is deprecated upstream; migration to `google.genai` is advisable
 - The current codebase still runs on Python 3.9, though newer Python versions are preferable
 - The drafting prompts are tuned to write in simpler legalese and remain closer to the language of the source document
+- The current runtime is configured around `gemini-2.5-flash`
 
 ## Known Improvement Areas
 

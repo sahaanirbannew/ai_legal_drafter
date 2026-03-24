@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
+import re
 import shutil
 from pathlib import Path
 
 from dotenv import load_dotenv
-from openai import OpenAI
 
+from gemini_client import analyze_case, generate_text, summarize_argument_differences
 from gemini_validator import validate_case
-from openai_client import analyze_case
 from pdf_generator import create_pdf
 from prompt import build_argument
 
@@ -32,35 +31,20 @@ class FileStorageService:
         return str(path)
 
 
-class OpenAIFileService:
-    def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file or environment variables.")
-        self.client = OpenAI(api_key=api_key)
-
-    def upload_file(self, path: str) -> str:
-        uploaded = self.client.files.create(file=open(path, "rb"), purpose="assistants")
-        return uploaded.id
-
-
 class AnalysisService:
-    def analyze(self, openai_file_id: str) -> dict:
-        return analyze_case(openai_file_id)
+    def analyze(self, pdf_path: str) -> dict:
+        return analyze_case(pdf_path)
 
 
 class DraftingService:
     def build_draft(self, analysis: dict) -> str:
         return build_argument(analysis)
 
+    def build_argument_differences(self, analysis: dict, draft_text: str) -> list[str]:
+        return summarize_argument_differences(analysis, draft_text)
+
 
 class RevisionService:
-    def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file or environment variables.")
-        self.client = OpenAI(api_key=api_key)
-
     def revise_draft(self, analysis: dict, draft_text: str, validation_text: str) -> str:
         prompt = f"""
 You are senior Supreme Court counsel in India revising a draft legal argument for the applicant.
@@ -101,21 +85,10 @@ EXISTING DRAFT:
 VALIDATION REPORT:
 {validation_text}
 """
-
-        response = self.client.responses.create(
-            model="gpt-5",
-            input=prompt,
-        )
-        return response.output_text.strip()
+        return generate_text(prompt)
 
 
 class FinalizationService:
-    def __init__(self) -> None:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file or environment variables.")
-        self.client = OpenAI(api_key=api_key)
-
     def finalize_draft(
         self,
         analysis: dict,
@@ -163,26 +136,52 @@ VALIDATION REPORT:
 REVIEWER COMMENTS:
 {json.dumps(comments, ensure_ascii=True, indent=2)}
 """
-        response = self.client.responses.create(
-            model="gpt-5",
-            input=prompt,
-        )
-        return response.output_text.strip()
+        return generate_text(prompt)
 
 
 class ValidationService:
+    @staticmethod
+    def _extract_json_payload(text: str) -> dict:
+        text = str(text or "").strip()
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            if not match:
+                raise
+            return json.loads(match.group(0))
+
+    @staticmethod
+    def _fallback_validation_data(validation_text: str, reason: str) -> dict:
+        return {
+            "validation_failed": True,
+            "failure_reason": reason,
+            "raw_text": validation_text,
+            "overall_validity_score": None,
+            "logic_score": None,
+            "citation_validity_score": None,
+            "issues_found": [reason] if reason else [],
+            "suggested_improvements": [
+                "Retry validation after checking Gemini API availability, PDF readability, and response format."
+            ],
+            "hallucinated_citations": [],
+        }
+
     def validate(self, original_pdf_path: str, draft_pdf_path: str, analysis: dict) -> tuple[str, dict]:
         validation_text = validate_case(original_pdf_path, draft_pdf_path, analysis)
         try:
-            validation_data = json.loads(validation_text)
-        except json.JSONDecodeError:
-            logger.warning("Validation response was not valid JSON")
-            validation_data = {
-                "raw_text": validation_text,
-                "issues_found": [],
-                "suggested_improvements": [],
-                "hallucinated_citations": [],
-            }
+            validation_data = self._extract_json_payload(validation_text)
+            validation_data.setdefault("validation_failed", False)
+            validation_data.setdefault("failure_reason", "")
+            validation_data.setdefault("issues_found", [])
+            validation_data.setdefault("suggested_improvements", [])
+            validation_data.setdefault("hallucinated_citations", [])
+        except Exception as exc:
+            logger.warning("Validation response was not valid JSON: %s", exc)
+            validation_data = self._fallback_validation_data(
+                validation_text,
+                f"Gemini returned a response that could not be parsed as JSON: {exc}",
+            )
         return validation_text, validation_data
 
 

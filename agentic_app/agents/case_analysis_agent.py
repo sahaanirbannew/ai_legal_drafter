@@ -10,9 +10,8 @@ class CaseAnalysisAgent(BaseAgent):
         self.analysis_service = analysis_service
 
     def run(self, case_state: CaseState) -> CaseState:
-        if not case_state.openai_file_id:
-            raise ValueError("Case is missing OpenAI file id")
-        case_state.analysis = self.analysis_service.analyze(case_state.openai_file_id)
+        if not case_state.uploaded_pdf_path:
+            raise ValueError("Case is missing uploaded PDF path")
+        case_state.analysis = self.analysis_service.analyze(case_state.uploaded_pdf_path)
         case_state.status = "analyzed"
         return case_state
-

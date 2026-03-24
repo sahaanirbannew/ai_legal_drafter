@@ -1,6 +1,6 @@
 # AI Legal Drafter
 
-AI Legal Drafter is a FastAPI-based legal drafting system for analysing Indian case PDFs, generating structured legal arguments, validating them with Gemini, revising them through an agentic workflow, and exporting final downloadable PDFs.
+AI Legal Drafter is a FastAPI-based legal drafting system for analysing Indian case PDFs with Gemini, generating structured legal arguments, validating them with Gemini, revising them through an agentic workflow, and exporting final downloadable PDFs.
 
 ## Features
 
@@ -17,7 +17,6 @@ AI Legal Drafter is a FastAPI-based legal drafting system for analysing Indian c
 ## Tech Stack
 
 - FastAPI
-- OpenAI Responses API
 - Gemini 2.5 Flash
 - ReportLab
 - Vanilla HTML/CSS/JavaScript
@@ -48,7 +47,7 @@ See [DOCUMENTATION.md](./DOCUMENTATION.md) for the full architecture and API ref
 ├── static/
 ├── templates/
 ├── main.py
-├── openai_client.py
+├── gemini_client.py
 ├── gemini_validator.py
 ├── prompt.py
 ├── pdf_generator.py
@@ -71,8 +70,8 @@ pip install -r requirements.txt
 Create a `.env` file with:
 
 ```env
-OPENAI_API_KEY=your_openai_key
 GEMINI_API_KEY=your_gemini_key
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 ### 3. Run the server
@@ -111,16 +110,17 @@ The app now:
 
 - prefers Supreme Court citations
 - refines candidate citations in a second pass
-- asks an LLM for a document link using the case name, court, and description
-- uses only validated LLM-returned links
-- leaves the citation link blank if the LLM does not return a validated result
-- shows the raw LLM response in the UI for inspection
+- asks Gemini for a PDF link from the Supreme Court or a High Court website using the case name, court, and description
+- expects a nested `validated` object with source, file-type, and correctness flags
+- accepts the link only when Gemini confirms it is a PDF, from Supreme Court or High Court, and matches the case description
+- shows the raw LLM response and parsed validation flags in the UI for inspection
 
 ## Notes
 
 - Runtime case data is stored in `agentic_app_data/`
 - Downloaded PDFs are written to the local `~/Downloads` folder
-- The Gemini SDK currently used in the project is deprecated upstream and should eventually be migrated
+- The project now uses Gemini for analysis, citation-link lookup, draft revision, finalization, and validation
+- The default runtime model is `gemini-2.5-flash`
 - The app is designed to draft in simpler legalese while staying close to the wording of the source case papers
 
 ## License

@@ -70,7 +70,19 @@ async def _run_validation_task(task_id):
         logger.error('Validation task failed for task_id=%s: %s', task_id, e, exc_info=True)
         validation_tasks[task_id] = {
             "status": "error",
-            "error": str(e)
+            "error": str(e),
+            "result": {
+                "validation_failed": True,
+                "failure_reason": str(e),
+                "overall_validity_score": None,
+                "logic_score": None,
+                "citation_validity_score": None,
+                "issues_found": [str(e)],
+                "suggested_improvements": [
+                    "Retry validation after checking Gemini API availability, model configuration, and the uploaded PDF."
+                ],
+                "hallucinated_citations": [],
+            }
         }
 
 

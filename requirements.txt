@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-openai
 python-multipart
 jinja2
 reportlab

@@ -16,7 +16,6 @@ from agentic_app.services import (
     DraftingService,
     FinalizationService,
     FileStorageService,
-    OpenAIFileService,
     PdfService,
     RevisionService,
     ValidationService,
@@ -31,7 +30,7 @@ class CaseWorkflowOrchestrator:
         storage_service = FileStorageService(self.repository.uploads_path)
         pdf_service = PdfService()
 
-        self.intake_agent = IntakeAgent(storage_service, OpenAIFileService())
+        self.intake_agent = IntakeAgent(storage_service)
         self.analysis_agent = CaseAnalysisAgent(AnalysisService())
         self.drafting_agent = DraftingAgent(DraftingService())
         self.validation_agent = ValidationAgent(pdf_service, ValidationService())

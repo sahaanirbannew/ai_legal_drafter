@@ -67,6 +67,30 @@ function appendDownloadLog(message) {
     log.scrollTop = log.scrollHeight
 }
 
+function buildValidationSummary(validationData) {
+    let issues = (validationData.issues_found || []).map(item => `- ${item}`).join("\n") || "- None reported"
+    let improvements = (validationData.suggested_improvements || []).map(item => `- ${item}`).join("\n") || "- None reported"
+    let summary =
+        `Overall validity: ${validationData.overall_validity_score ?? "N/A"}/10\n` +
+        `Logic: ${validationData.logic_score ?? "N/A"}/10\n` +
+        `Citations: ${validationData.citation_validity_score ?? "N/A"}/10\n\n`
+
+    if (validationData.validation_failed) {
+        summary += `Validation status: Failed\n`
+        summary += `Reason: ${validationData.failure_reason || "Unknown validation failure."}\n\n`
+    }
+
+    summary +=
+        `Issues:\n${issues}\n\n` +
+        `Suggested improvements:\n${improvements}`
+
+    if (validationData.raw_text) {
+        summary += `\n\nRaw validator response:\n${validationData.raw_text}`
+    }
+
+    return summary
+}
+
 function setDownloadProgress(value, message) {
     let bar = document.getElementById("downloadProgressBar")
     let label = document.getElementById("downloadProgressLabel")
@@ -136,6 +160,7 @@ function resetPipelineState() {
     document.getElementById("commentList").innerHTML = `<div class="muted-note">No comments added yet.</div>`
     document.getElementById("citationDetails").innerText = "Click a citation inside the argument to view its details here."
     document.getElementById("validationSummary").innerText = "No validation result yet."
+    document.getElementById("argumentDifferenceSummary").innerText = "No comparison available yet."
     document.getElementById("caseSummary").innerText = "Applicant: Not yet extracted.\nDefendant: Not yet extracted.\nCharges: Not yet extracted.\nDemands: Not yet extracted.\n\nExisting argument provided: Pending analysis."
     document.getElementById("downloadLog").innerHTML = "<li>No download activity yet.</li>"
     setDownloadProgress(0, "Waiting to finalise.")
@@ -232,6 +257,17 @@ function renderCommentList() {
     })
 }
 
+function renderArgumentDifferences(points) {
+    let container = document.getElementById("argumentDifferenceSummary")
+    if (!container) return
+    let items = Array.isArray(points) ? points.filter(Boolean) : []
+    if (!items.length) {
+        container.innerText = "No comparison available yet."
+        return
+    }
+    container.innerText = items.map(item => `- ${item}`).join("\n")
+}
+
 function renderCaseSummary(analysis, draftText) {
     let demands = (analysis.demands || []).length ? analysis.demands.join("; ") : "Not extracted."
     let charges = Array.isArray(analysis.charges) && analysis.charges.length
@@ -283,6 +319,8 @@ function showCitationDetails(index) {
 
     let citation = citations[index]
     if (!citation) return
+    let validation = citation.llm_link_validation || {}
+    let validationText = `SC: ${validation.is_SupremeCourt ? "true" : "false"}, HC: ${validation.is_HighCourt ? "true" : "false"}, PDF: ${validation.is_PDF ? "true" : "false"}, Correct: ${validation.is_Correct ? "true" : "false"}`
 
     let html =
         `<strong>${escapeHtml(citation.case_name)}</strong>` +
@@ -292,7 +330,9 @@ function showCitationDetails(index) {
         `<div style="margin-top:8px;"><em>Relevance:</em> ${escapeHtml(String(citation.relevance_score ?? "N/A"))}</div>` +
         `<div><em>Strength:</em> ${escapeHtml(String(citation.strength_score ?? "N/A"))}</div>` +
         `<div><em>Link validation:</em> ${citation.link_verified ? "Validated LLM link" : "No validated link"}</div>` +
+        `<div style="margin-top:8px;"><em>LLM validation flags:</em> ${escapeHtml(validationText)}</div>` +
         `<div style="margin-top:8px;"><em>Link note:</em> ${escapeHtml(citation.link_note || "No additional note.")}</div>` +
+        `<div style="margin-top:8px;"><em>LLM input prompt:</em><pre class="llm-response-box">${escapeHtml(citation.llm_link_prompt || "No LLM prompt captured.")}</pre></div>` +
         `<div style="margin-top:8px;"><em>LLM returned citation link:</em> ${citation.link ? `<a href="${escapeHtml(citation.link)}" target="_blank" rel="noreferrer">${escapeHtml(citation.link)}</a>` : "No link provided"}</div>` +
         `<div style="margin-top:8px;"><em>LLM raw response:</em><pre class="llm-response-box">${escapeHtml(citation.llm_link_response || "No LLM response captured.")}</pre></div>`
     document.getElementById("citationDetails").innerHTML = html
@@ -313,7 +353,7 @@ async function upload() {
     resetPipelineState()
     showSpinner(true)
     updateStatus("Upload started.")
-    setAgentCalls(["IntakeAgent: saving uploaded PDF", "OpenAIFileService: creating OpenAI file"])
+    setAgentCalls(["IntakeAgent: saving uploaded PDF", "Gemini workflow: preparing document for analysis"])
     appendLog("Upload began. Preparing selected PDF for ingestion.")
     setUploadButtonEnabled(false)
 
@@ -413,6 +453,7 @@ async function generate() {
         let draftText = (caseState && caseState.draft_text) || data.text || ""
         renderEditor(draftText, citations)
         renderCaseSummary(analysis, draftText)
+        renderArgumentDifferences(caseState.argument_difference_points || [])
 
         return { success: true }
     } catch (err) {
@@ -464,26 +505,46 @@ async function validate() {
                     }
 
                     clearInterval(pollInterval)
-                    if (statusData.status === "error") {
+                    let validationData = typeof statusData.result === "string" ? JSON.parse(statusData.result) : statusData.result
+                    if (statusData.status === "error" && !validationData) {
                         throw new Error(statusData.error || "Validation failed")
                     }
 
-                    let validationData = typeof statusData.result === "string" ? JSON.parse(statusData.result) : statusData.result
-                    let summary =
-                        `Overall validity: ${validationData.overall_validity_score ?? "N/A"}/10\n` +
-                        `Logic: ${validationData.logic_score ?? "N/A"}/10\n` +
-                        `Citations: ${validationData.citation_validity_score ?? "N/A"}/10\n\n` +
-                        `Issues:\n${(validationData.issues_found || []).map(item => `- ${item}`).join("\n") || "- None reported"}\n\n` +
-                        `Suggested improvements:\n${(validationData.suggested_improvements || []).map(item => `- ${item}`).join("\n") || "- None reported"}`
+                    validationData = validationData || {
+                        validation_failed: true,
+                        failure_reason: statusData.error || "Validation failed",
+                        overall_validity_score: null,
+                        logic_score: null,
+                        citation_validity_score: null,
+                        issues_found: [statusData.error || "Validation failed"],
+                        suggested_improvements: ["Retry validation."],
+                        hallucinated_citations: [],
+                    }
+                    let summary = buildValidationSummary(validationData)
 
                     document.getElementById("validationSummary").innerText = summary
                     setAgentCalls(["RevisionAgent: revised draft ready", "Review workspace: user can finalise and download"])
-                    appendLog("Validation completed and the summary panel was updated.")
+                    appendLog(statusData.status === "error"
+                        ? "Validation failed, but a fallback summary was rendered in the UI."
+                        : "Validation completed and the summary panel was updated.")
                     appendLog(`Validation scores: overall ${validationData.overall_validity_score ?? "N/A"}, logic ${validationData.logic_score ?? "N/A"}, citations ${validationData.citation_validity_score ?? "N/A"}.`)
-                    resolve({ success: true })
+                    updateStatus(statusData.status === "error" ? "Validation failed with fallback summary." : "Validation completed.")
+                    resolve({ success: statusData.status !== "error" })
                 } catch (pollErr) {
                     clearInterval(pollInterval)
                     updateStatus("Validation failed.")
+                    document.getElementById("validationSummary").innerText = buildValidationSummary({
+                        validation_failed: true,
+                        failure_reason: pollErr.message,
+                        overall_validity_score: null,
+                        logic_score: null,
+                        citation_validity_score: null,
+                        issues_found: [pollErr.message],
+                        suggested_improvements: [
+                            "Retry validation after checking Gemini API access, model configuration, and PDF readability."
+                        ],
+                        hallucinated_citations: [],
+                    })
                     appendLog(`Validation polling failed: ${pollErr.message}`)
                     alert("Validation failed: " + pollErr.message)
                     resolve({ success: false })
@@ -492,6 +553,18 @@ async function validate() {
         })
     } catch (err) {
         updateStatus("Validation failed.")
+        document.getElementById("validationSummary").innerText = buildValidationSummary({
+            validation_failed: true,
+            failure_reason: err.message,
+            overall_validity_score: null,
+            logic_score: null,
+            citation_validity_score: null,
+            issues_found: [err.message],
+            suggested_improvements: [
+                "Retry validation after checking Gemini API access, model configuration, and PDF readability."
+            ],
+            hallucinated_citations: [],
+        })
         appendLog(`Validation start failed: ${err.message}`)
         alert("Validation failed: " + err.message)
         return { success: false }

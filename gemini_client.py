@@ -1,22 +1,61 @@
-# OpenAI API client helper functions
+from __future__ import annotations
 
-import os
-import logging
-from dotenv import load_dotenv
-from openai import OpenAI
 import json
-from typing import Optional
+import logging
+import os
+import re
+from typing import Any, Optional
 
-logger = logging.getLogger('ai_legal_drafter.openai_client')
+from dotenv import load_dotenv
+import google.generativeai as genai
 
-# Load environment variables from .env file
+logger = logging.getLogger("ai_legal_drafter.gemini_client")
+
 load_dotenv()
 
-openai_api_key = os.getenv("OPENAI_API_KEY")
-if not openai_api_key:
-    raise EnvironmentError("OPENAI_API_KEY not set in environment or .env file")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+if not gemini_api_key:
+    raise EnvironmentError("GEMINI_API_KEY not set in environment or .env file")
 
-client = OpenAI(api_key=openai_api_key)
+genai.configure(api_key=gemini_api_key)
+
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+model = genai.GenerativeModel(MODEL_NAME)
+
+
+def _extract_json_payload(text: str) -> dict[str, Any]:
+    text = text.strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+        if not match:
+            raise
+        return json.loads(match.group(0))
+
+
+def _generate_content(prompt: str, parts: list[dict[str, Any]] | None = None, expect_json: bool = False) -> str:
+    payload: list[Any] = [prompt]
+    if parts:
+        payload.extend(parts)
+
+    generation_config = {"response_mime_type": "application/json"} if expect_json else None
+    response = model.generate_content(payload, generation_config=generation_config)
+    return response.text.strip()
+
+
+def generate_text(prompt: str, parts: list[dict[str, Any]] | None = None) -> str:
+    return _generate_content(prompt, parts=parts, expect_json=False)
+
+
+def generate_json(prompt: str, parts: list[dict[str, Any]] | None = None) -> tuple[dict[str, Any], str]:
+    raw_text = _generate_content(prompt, parts=parts, expect_json=True)
+    return _extract_json_payload(raw_text), raw_text
+
+
+def _read_pdf_part(path: str) -> dict[str, Any]:
+    with open(path, "rb") as file_obj:
+        return {"mime_type": "application/pdf", "data": file_obj.read()}
 
 
 def _resolve_link_from_description(citation: dict) -> tuple[Optional[str], bool, str, str, str]:
@@ -27,30 +66,44 @@ def _resolve_link_from_description(citation: dict) -> tuple[Optional[str], bool,
     description_payload = f"""{case_name}
 Court: {court}
 Description: {description}"""
-    prompt = f"""Give me the document link (preferably link to a pdf file) for the below description:
-{description_payload}
+    prompt = f"""
+Give me the PDF link from Supreme Court or High Court of India for the case given at the end of the instructions.
 
-Return in json format {{ "link": < all link here >, "validated": < True if you are sure that is the file > }}
+Mandatory response format:
+{{
+"link": < all link here >,
+"validated": {{
+  "is_SupremeCourt": <True if the source is Supreme Court of India website>,
+  "is_HighCourt": <True if the source is High Court of India website>,
+  "is_PDF": <True if the link is PDF file>,
+  "is_Correct": <True if the file content matches description>
+}}
+}}
+
+Case:
+{description_payload}
 """
 
     try:
-        response = client.responses.create(
-            model="gpt-5",
-            input=prompt,
-        )
-        raw_response = response.output_text.strip()
-        parsed = json.loads(raw_response)
+        parsed, raw_response = generate_json(prompt)
         link = str(parsed.get("link", "") or "").strip()
-        validated = bool(parsed.get("validated", False))
+        validation = parsed.get("validated", {}) or {}
+        is_supreme = bool(validation.get("is_SupremeCourt", False))
+        is_high = bool(validation.get("is_HighCourt", False))
+        is_pdf = bool(validation.get("is_PDF", False))
+        is_correct = bool(validation.get("is_Correct", False))
+        validated = bool(link) and is_pdf and is_correct and (is_supreme or is_high)
         if not link:
-            return None, False, "No document link was returned by the LLM.", raw_response, prompt
-        return link, validated, "Link resolved from citation description via LLM.", raw_response, prompt
+            return None, False, "No document link was returned by Gemini.", raw_response, prompt
+        if validated:
+            return link, True, "Link resolved from citation description via Gemini.", raw_response, prompt
+        return link, False, "Gemini returned a link, but the validation flags did not fully confirm it.", raw_response, prompt
     except Exception as exc:
         logger.warning("Description-based link resolution failed for %s: %s", case_name, exc)
         return None, False, "Description-based link resolution failed.", str(exc), prompt
 
 
-def _ensure_required_case_fields(analysis: dict) -> dict:
+def _ensure_required_case_fields(analysis: dict[str, Any]) -> dict[str, Any]:
     defaults = {
         "applicant": "Not clearly named in the extracted materials.",
         "defendant": "Not clearly named in the extracted materials.",
@@ -72,29 +125,33 @@ def _ensure_required_case_fields(analysis: dict) -> dict:
     return analysis
 
 
-def _sort_and_normalize_citations(citations: list[dict]) -> list[dict]:
-    def court_rank(citation: dict) -> tuple[int, float]:
+def _sort_and_normalize_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def court_rank(citation: dict[str, Any]) -> tuple[int, float]:
         court = str(citation.get("court", "")).lower()
         rank = 0 if "supreme court" in court else 1
         strength = float(citation.get("strength_score", 0) or 0)
         return (rank, -strength)
 
-    normalized = []
+    normalized: list[dict[str, Any]] = []
     for citation in sorted(citations, key=court_rank):
-        if not citation.get("case_name", "").strip():
+        if not str(citation.get("case_name", "")).strip():
             continue
 
         llm_link, llm_validated, llm_note, llm_raw_response, llm_prompt = _resolve_link_from_description(citation)
         citation["llm_link_prompt"] = llm_prompt
         citation["llm_link_response"] = llm_raw_response
+        try:
+            citation["llm_link_validation"] = _extract_json_payload(llm_raw_response).get("validated", {})
+        except Exception:
+            citation["llm_link_validation"] = {}
 
         if llm_link and llm_validated:
             citation["link"] = llm_link
             citation["link_note"] = llm_note
             citation["link_verified"] = True
         else:
-            citation["link"] = ""
-            citation["link_note"] = llm_note if llm_link else "No validated citation link was returned by the LLM."
+            citation["link"] = llm_link or ""
+            citation["link_note"] = llm_note if llm_link else "No validated citation link was returned by Gemini."
             citation["link_verified"] = False
 
         normalized.append(citation)
@@ -102,7 +159,7 @@ def _sort_and_normalize_citations(citations: list[dict]) -> list[dict]:
     return normalized
 
 
-def _validate_and_refine_citations(citations: list[dict]) -> list[dict]:
+def _validate_and_refine_citations(citations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not citations:
         return []
 
@@ -117,8 +174,7 @@ Rules:
 - Use High Court authorities only when especially relevant and when Supreme Court authority is insufficient.
 - Ensure the case name and court are consistent.
 - If you are not highly confident about an exact direct document URL, do NOT invent a direct link.
-- Do not provide Indian Kanoon search links or fallback search URLs.
-- If exact document-link certainty is low, leave the link blank and mark it unverified.
+- Leave the link blank if exact document-link certainty is low.
 - Return no more than 5 citations.
 
 Return ONLY valid JSON with this format:
@@ -144,18 +200,13 @@ Candidate citations:
 {json.dumps(citations, ensure_ascii=True, indent=2)}
 """
 
-    response = client.responses.create(
-        model="gpt-5",
-        input=prompt,
-    )
-    parsed = json.loads(response.output_text)
+    parsed, _ = generate_json(prompt)
     return _sort_and_normalize_citations(parsed.get("citations", []))
 
 
-def analyze_case(file_id):
-    logger.info('analyze_case called with file_id=%s', file_id)
-    try:
-        prompt = """
+def analyze_case(pdf_path: str) -> dict[str, Any]:
+    logger.info("analyze_case called with pdf_path=%s", pdf_path)
+    prompt = """
 You are a senior Supreme Court lawyer in India representing the applicant.
 
 Analyse the uploaded legal document and respond ONLY in JSON.
@@ -190,7 +241,7 @@ Return JSON format:
    "reasons": []
  },
  "citations":[
- {
+  {
    "case_name":"",
    "court":"",
    "description":"",
@@ -210,7 +261,6 @@ IMPORTANT:
 Only cite real cases.
 Strongly prefer Supreme Court of India cases.
 Use High Court cases sparingly and only when they are uniquely relevant.
-Do not invent document ids or fallback search links.
 If you are unsure of the exact document URL, leave the link blank.
 Do not leave applicant, defendant, or charges blank. If the document is unclear, provide the best supported extraction or inference from the text.
 Do not leave forum or authority_to_approach_court blank. State the best supported legal basis from the document, such as the section invoked, the revisional/appellate/writ jurisdiction, or the procedural route used to approach the court.
@@ -221,21 +271,56 @@ Think like experienced Supreme Court counsel: identify the strongest defensible 
 Do not leave plan_of_action blank. State clearly whether the next step should be a fresh petition or a revised petition, what precise remedy should be sought, and why that is the best course in this matter.
 """
 
-        response = client.responses.create(
-            model="gpt-5",
-            input=[{
-                "role":"user",
-                "content":[
-                    {"type":"input_file","file_id":file_id},
-                    {"type":"input_text","text":prompt}
-                ]
-            }]
-        )
+    parsed, raw_response = generate_json(prompt, parts=[_read_pdf_part(pdf_path)])
+    logger.debug("analyze_case Gemini response: %s", raw_response)
+    analysis = _ensure_required_case_fields(parsed)
+    analysis["citations"] = _validate_and_refine_citations(analysis.get("citations", []))
+    return analysis
 
-        logger.debug('analyze_case OpenAI response: %s', response)
-        analysis = _ensure_required_case_fields(json.loads(response.output_text))
-        analysis["citations"] = _validate_and_refine_citations(analysis.get("citations", []))
-        return analysis
-    except Exception as e:
-        logger.error('analyze_case failed: %s', e, exc_info=True)
-        raise
+
+def summarize_argument_differences(analysis: dict[str, Any], draft_text: str) -> list[str]:
+    prompt = f"""
+You are a senior Indian lawyer comparing:
+1. the existing case-side argument points extracted from the source material, and
+2. the proposed drafted argument prepared for filing.
+
+Write only JSON in this format:
+{{
+  "bullets": [
+    ""
+  ]
+}}
+
+Instructions:
+- Explain the differences from a lawyer's point of view.
+- Use short bullet points.
+- Focus on legal structure, maintainability/jurisdiction, remedy framing, strength of authorities, factual linkage, and persuasive force.
+- Do not praise generally. Be concrete.
+- Return 4 to 6 bullets.
+
+EXISTING CASE ARGUMENT POINTS:
+{json.dumps(analysis.get("arguments", []), ensure_ascii=True, indent=2)}
+
+CASE DEMANDS:
+{json.dumps(analysis.get("demands", []), ensure_ascii=True, indent=2)}
+
+PROPOSED DRAFT:
+{draft_text}
+"""
+    try:
+        parsed, _ = generate_json(prompt)
+        bullets = parsed.get("bullets", [])
+        if isinstance(bullets, list) and bullets:
+            return [str(item).strip() for item in bullets if str(item).strip()]
+    except Exception as exc:
+        logger.warning("Argument-difference summary generation failed: %s", exc)
+
+    fallback = []
+    if analysis.get("authority_to_approach_court"):
+        fallback.append("The proposed draft expressly states jurisdiction and the legal basis for approaching the court, which is often missing or only implicit in raw case-side argument notes.")
+    if analysis.get("citations"):
+        fallback.append("The proposed draft is more authority-driven and ties the case theory to identified precedent instead of leaving the legal position as bare assertion.")
+    if analysis.get("plan_of_action"):
+        fallback.append("The proposed draft is more remedially precise because it states what filing route and relief should be pursued, rather than only listing grievances.")
+    fallback.append("The proposed draft is more structured for adjudication because it converts scattered argument points into a filing-ready sequence of jurisdiction, demands, legal grounds, and relief.")
+    return fallback[:4]
